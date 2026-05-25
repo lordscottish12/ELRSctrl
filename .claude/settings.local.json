@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:ebitengine.org)",
+      "WebFetch(domain:www.expresslrs.org)",
+      "Bash(file dist/dronectrl)",
+      "Bash(ls *.yaml *.yml)",
+      "Bash(ls config*.*)",
+      "WebFetch(domain:manuals.plus)",
+      "WebFetch(domain:emaxmodel.com)",
+      "WebFetch(domain:www.rotorama.cz)",
+      "WebFetch(domain:electropinout.com)",
+      "PowerShell(Get-PnpDevice *)",
+      "WebFetch(domain:raw.githubusercontent.com)"
+    ]
+  }
+}

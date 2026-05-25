@@ -1,0 +1,9 @@
+# Build output
+/dist/
+*.exe
+
+# Local, machine-specific profile (commit config.example.yaml instead)
+/config.yaml
+
+# Go
+/vendor/

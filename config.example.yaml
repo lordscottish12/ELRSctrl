@@ -1,0 +1,82 @@
+# dronectrl profile. Copy to config.yaml (or pass --config) and edit, or just
+# tweak everything live in the app's Settings/Mapping screens and hit Save.
+
+serial:
+  port: ""        # "COM5" (Windows) or "/dev/ttyACM0" (Linux). Empty = pick in the UI.
+  baud: 115200    # handset-link UART; 115200 works over the Aeris Link USB/CP2102 (420000 is the over-air rate, not this).
+
+sender:
+  rate_hz: 250            # CRSF frames per second (50-500; 150 matches a handset).
+  address: "0xEE"         # 0xEE = CRSF transmitter (handset->module). 0xC8 also works.
+  stale_timeout_ms: 250   # if the UI snapshot is older than this, transmit failsafe.
+
+safety:
+  arm_source: menu        # button that arms (see source names below)
+  kill_source: view       # button that instantly disarms
+  arm_toggle: true        # true: press toggles armed; false: hold-to-arm (deadman)
+
+# 16 channels. Each: type is one of none | analog | switch2 | switch3 | fixed.
+#
+# source / source2 names:
+#   analog axes:  left_stick_x  left_stick_y  right_stick_x  right_stick_y
+#                 left_trigger  right_trigger  triggers   (triggers = R2 fwd / L2 rev)
+#   buttons:      a b x y  lb rb  l3 r3  view menu steam
+#                 dpad_up dpad_down dpad_left dpad_right
+#
+# tick values: 172 = ~1000us, 992 = 1500us (center), 1811 = ~2000us.
+channels:
+  - name: Steering        # CH1
+    type: analog
+    source: left_stick_x
+    reverse: false
+    expo: 0.0             # -1..1; >0 softens around center
+    deadzone: 0.0         # 0..0.9 fraction ignored near rest
+    trim: 0               # ticks added after scaling
+    min: 172
+    max: 1811
+    failsafe: 992
+
+  - name: Throttle        # CH2 — R2 forward / L2 reverse
+    type: analog
+    source: triggers
+    min: 172
+    max: 1811
+    failsafe: 992         # neutral = stop for a bidirectional ESC
+
+  - name: Aux1            # CH3 — A button toggles
+    type: switch2
+    source: a
+    momentary: false
+    low: 172
+    high: 1811
+    failsafe: 992
+
+  - name: Aux2            # CH4 — B button toggles
+    type: switch2
+    source: b
+    low: 172
+    high: 1811
+    failsafe: 992
+
+  # Example of a 3-position switch (uncomment & adapt):
+  # - name: Mode
+  #   type: switch3
+  #   source: dpad_up      # -> high
+  #   source2: dpad_down   # -> low
+  #   low: 172
+  #   mid: 992
+  #   high: 1811
+  #   failsafe: 992
+
+  - { name: CH5,  type: none, source: none, min: 172, max: 1811, failsafe: 992 }
+  - { name: CH6,  type: none, source: none, min: 172, max: 1811, failsafe: 992 }
+  - { name: CH7,  type: none, source: none, min: 172, max: 1811, failsafe: 992 }
+  - { name: CH8,  type: none, source: none, min: 172, max: 1811, failsafe: 992 }
+  - { name: CH9,  type: none, source: none, min: 172, max: 1811, failsafe: 992 }
+  - { name: CH10, type: none, source: none, min: 172, max: 1811, failsafe: 992 }
+  - { name: CH11, type: none, source: none, min: 172, max: 1811, failsafe: 992 }
+  - { name: CH12, type: none, source: none, min: 172, max: 1811, failsafe: 992 }
+  - { name: CH13, type: none, source: none, min: 172, max: 1811, failsafe: 992 }
+  - { name: CH14, type: none, source: none, min: 172, max: 1811, failsafe: 992 }
+  - { name: CH15, type: none, source: none, min: 172, max: 1811, failsafe: 992 }
+  - { name: CH16, type: none, source: none, min: 172, max: 1811, failsafe: 992 }
