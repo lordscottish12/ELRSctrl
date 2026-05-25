@@ -3,8 +3,8 @@ package channels
 import (
 	"math"
 
-	"dronectrl/internal/crsf"
-	"dronectrl/internal/input"
+	"elrsctrl/internal/crsf"
+	"elrsctrl/internal/input"
 )
 
 // Engine evaluates a mapping each frame. It is stateful because toggle switches

@@ -1,13 +1,13 @@
-// Command dronectrl turns a Steam Deck (or any gamepad) into an RC transmitter
+// Command elrsctrl turns a Steam Deck (or any gamepad) into an RC transmitter
 // for an ExpressLRS TX module, sending CRSF RC frames over a serial port.
 //
 // Normal use opens the UI:
 //
-//	dronectrl --config config.yaml
+//	elrsctrl --config config.yaml
 //
 // Hardware bring-up (no UI) — prove the link moves a servo before mapping:
 //
-//	dronectrl --port COM5 --sweep 1
+//	elrsctrl --port COM5 --sweep 1
 package main
 
 import (
@@ -20,11 +20,11 @@ import (
 
 	"github.com/hajimehoshi/ebiten/v2"
 
-	"dronectrl/internal/config"
-	"dronectrl/internal/input"
-	"dronectrl/internal/sender"
-	"dronectrl/internal/state"
-	"dronectrl/internal/ui"
+	"elrsctrl/internal/config"
+	"elrsctrl/internal/input"
+	"elrsctrl/internal/sender"
+	"elrsctrl/internal/state"
+	"elrsctrl/internal/ui"
 )
 
 func main() {
@@ -96,7 +96,7 @@ func main() {
 	g := ui.New(&cfg, *cfgPath, store, snd, reader)
 
 	ebiten.SetWindowSize(1280, 800)
-	ebiten.SetWindowTitle("dronectrl — Steam Deck → ELRS")
+	ebiten.SetWindowTitle("ELRSctrl — Steam Deck → ELRS")
 	ebiten.SetWindowResizingMode(ebiten.WindowResizingModeEnabled)
 	ebiten.SetRunnableOnUnfocused(true) // keep transmitting if the window loses focus
 	if *fullscreen {

@@ -1,4 +1,4 @@
-# dronectrl
+# ELRSctrl
 
 Turn a **Steam Deck** (or any gamepad) into an RC transmitter for an **EMAX Aeris
 Link / ExpressLRS (ELRS) TX module**. It reads the Deck's controls, lets you remap
@@ -36,7 +36,7 @@ You need to get **CRSF serial data + power** into the module:
     `http://10.0.0.1`): set **CRSF Serial RX = 3, TX = 1** (`/hardware.html`), turn
     **UART inverted OFF** (Options tab), and keep the **Backpack disabled**. The port
     shows up as `COMx` (Windows) or `/dev/ttyUSB0` (Linux, cp210x driver — *not*
-    `ttyACM0`). Then run dronectrl at **115200** baud.
+    `ttyACM0`). Then run elrsctrl at **115200** baud.
   - **FTDI → JR-bay CRSF pin (fallback, not tested here):** wire a **3.3 V** USB-serial
     adapter's TX to the module's CRSF pin (JR bay, half-duplex). With UART-inverted
     **off** a plain non-inverted adapter works; with it on you'd need an inverting one.
@@ -44,7 +44,7 @@ You need to get **CRSF serial data + power** into the module:
   **USB-C hub/dock** with passthrough power if you want to charge while driving.
 
 > **⚙️ Verified EMAX Aeris Link config (USB-C):** module web UI → CRSF serial
-> **pins 3/1**, **UART inverted = off**, backpack off; dronectrl **`--baud 115200`**,
+> **pins 3/1**, **UART inverted = off**, backpack off; elrsctrl **`--baud 115200`**,
 > address `0xEE`. These are specific to *this* module's CP2102-on-UART0 design.
 > **Other ELRS TX modules will differ** — USB-serial wiring, CRSF pins, inversion,
 > and sometimes the baud — so treat this as a worked example, not universal settings,
@@ -64,7 +64,7 @@ Install Go (1.22+): <https://go.dev/dl/>. Then, from the repo root:
 ```sh
 go mod tidy     # resolves ebiten, go.bug.st/serial, yaml.v3, x/image and writes go.sum
 go test ./...   # runs the CRSF + mapping unit tests
-go run ./cmd/dronectrl   # opens the UI on your dev machine (plug in any gamepad)
+go run ./cmd/elrsctrl   # opens the UI on your dev machine (plug in any gamepad)
 ```
 
 On **Windows** Ebiten needs no C compiler. On Linux/macOS dev machines it needs the
@@ -87,7 +87,7 @@ sudo apt-get install -y gcc pkg-config xorg-dev libgl1-mesa-dev libasound2-dev
 Then from the repo root in PowerShell:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\build-linux.ps1   # -> dist\dronectrl
+powershell -ExecutionPolicy Bypass -File scripts\build-linux.ps1   # -> dist\elrsctrl
 ```
 
 The `.ps1` just runs `scripts/build-linux.sh` inside WSL. That same script also
@@ -102,8 +102,8 @@ builds **on the Deck** in a distrobox/toolbox container (same packages,
 
 ## 3. Deploy & run on the Steam Deck
 
-1. Copy `dist/dronectrl` and a `config.yaml` (start from `config.example.yaml`) to
-   `~/dronectrl/` on the Deck and `chmod +x dronectrl`.
+1. Copy `dist/elrsctrl` and a `config.yaml` (start from `config.example.yaml`) to
+   `~/elrsctrl/` on the Deck and `chmod +x elrsctrl`.
 2. **Run from Desktop Mode first.** This gives the app clean, raw access to the
    built-in controller. (In Game Mode, Steam Input intercepts non-Steam games and
    only forwards an emulated gamepad — workable for standard sticks/buttons, but
@@ -123,8 +123,8 @@ builds **on the Deck** in a distrobox/toolbox container (same packages,
 Prove the serial link moves a servo/ESC on a bound receiver — no UI, no mapping:
 
 ```sh
-./dronectrl --port /dev/ttyUSB0 --sweep 1      # Aeris Link over USB (cp210x); sweeps CH1; Ctrl+C to stop
-# Windows dev:  .\dronectrl.exe --port COM4 --sweep 1
+./elrsctrl --port /dev/ttyUSB0 --sweep 1      # Aeris Link over USB (cp210x); sweeps CH1; Ctrl+C to stop
+# Windows dev:  .\elrsctrl.exe --port COM4 --sweep 1
 ```
 
 If the bound servo sweeps, your wiring/baud/address/CRSF pins are correct. If not,
@@ -134,7 +134,7 @@ baud from ELRS's autobaud list (400000/921600), or fall back to the FTDI→JR pa
 ### Normal use
 
 ```sh
-./dronectrl --config config.yaml          # or --fullscreen on the Deck
+./elrsctrl --config config.yaml          # or --fullscreen on the Deck
 ```
 
 Three touch/mouse screens:

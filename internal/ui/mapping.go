@@ -6,9 +6,9 @@ import (
 
 	"github.com/hajimehoshi/ebiten/v2"
 
-	"dronectrl/internal/channels"
-	"dronectrl/internal/crsf"
-	"dronectrl/internal/input"
+	"elrsctrl/internal/channels"
+	"elrsctrl/internal/crsf"
+	"elrsctrl/internal/input"
 )
 
 // drawMapping renders the channel list (left) and the editor for the selected

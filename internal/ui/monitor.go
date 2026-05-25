@@ -5,7 +5,7 @@ import (
 
 	"github.com/hajimehoshi/ebiten/v2"
 
-	"dronectrl/internal/crsf"
+	"elrsctrl/internal/crsf"
 )
 
 // Monitor screen geometry.

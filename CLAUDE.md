@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-`dronectrl` turns a Steam Deck (or any gamepad) into an RC transmitter for an
+`elrsctrl` turns a Steam Deck (or any gamepad) into an RC transmitter for an
 ExpressLRS (ELRS) TX module. It reads gamepad controls, maps them to 16 RC
 channels, and streams **CRSF** frames over a serial port to the module — like an
 EdgeTX handset driving an external module. Native UI is **Ebitengine**
@@ -19,8 +19,8 @@ go build ./...                      # full build (incl. UI; no C compiler needed
 go vet ./...
 go test ./...                       # unit tests (crsf + channels)
 go test -run TestSwitch2Toggle ./internal/channels/   # a single test
-go run ./cmd/dronectrl              # open the UI on a dev machine
-go run ./cmd/dronectrl --port COM5 --sweep 1   # hardware bring-up: no UI, sweep CH1
+go run ./cmd/elrsctrl              # open the UI on a dev machine
+go run ./cmd/elrsctrl --port COM5 --sweep 1   # hardware bring-up: no UI, sweep CH1
 ```
 
 Build for the Steam Deck (linux/amd64) — Ebiten needs cgo **and** the X11/OpenGL/
@@ -30,19 +30,17 @@ gcc pkg-config xorg-dev libgl1-mesa-dev libasound2-dev` + Go on PATH. Then from 
 repo root in PowerShell:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\build-linux.ps1   # -> dist/dronectrl
+powershell -ExecutionPolicy Bypass -File scripts\build-linux.ps1   # -> dist/elrsctrl
 ```
 
 The `.ps1` is a thin wrapper that runs `scripts/build-linux.sh` inside WSL; that
 same `.sh` also builds in a distrobox/toolbox on the Deck itself. Build glibc must
 be ≤ the Deck's (SteamOS 3.x ≈ 2.37), so prefer an older Ubuntu (22.04 = 2.35).
 
-> **This dev machine:** Go is not on PATH; a local toolchain lives at
-> `%LOCALAPPDATA%\go-dronectrl\go\bin`. Prefix Go commands by prepending that to
-> `$env:Path` and setting `GOPATH`/`GOCACHE` under the same folder (see
-> `~/.claude` memory `local-go-toolchain`). Do **not** `go run` the GUI in a
-> headless tool environment — it opens a window and hangs; use `go test` and the
-> no-window `--sweep` path instead.
+> **Heads-up (any environment):** don't `go run` the GUI (`./cmd/elrsctrl`) in a
+> headless/CI/agent environment — it opens a window and hangs. Verify logic with
+> `go test` and the no-window `--sweep` path instead. Personal per-machine setup
+> (e.g. a Go toolchain that isn't on PATH) goes in a gitignored `CLAUDE.local.md`.
 
 ## Architecture
 

@@ -1,4 +1,4 @@
-# Build dronectrl for the Steam Deck (linux/amd64) from Windows, via WSL2.
+# Build elrsctrl for the Steam Deck (linux/amd64) from Windows, via WSL2.
 #
 # The Deck is linux/amd64 and Ebiten needs cgo + the X11/OpenGL/ALSA dev headers
 # there. A Windows-hosted cross compiler (e.g. `zig cc`) ships libc but NOT those
@@ -69,4 +69,4 @@ if ($LASTEXITCODE -ne 0) {
     Write-Error "WSL build failed (exit $LASTEXITCODE). See the messages above for missing Go/headers."
 }
 
-Write-Output "Done. dist\dronectrl is on the Windows side -- copy it + config.yaml to the Deck (see README)."
+Write-Output "Done. dist\elrsctrl is on the Windows side -- copy it + config.yaml to the Deck (see README)."

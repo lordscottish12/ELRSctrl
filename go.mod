@@ -1,4 +1,4 @@
-module dronectrl
+module elrsctrl
 
 // Direct deps:
 //   - github.com/hajimehoshi/ebiten/v2  window, gamepad, touch, rendering (no cgo on Windows)

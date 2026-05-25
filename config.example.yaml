@@ -1,4 +1,4 @@
-# dronectrl profile. Copy to config.yaml (or pass --config) and edit, or just
+# elrsctrl profile. Copy to config.yaml (or pass --config) and edit, or just
 # tweak everything live in the app's Settings/Mapping screens and hit Save.
 
 serial:

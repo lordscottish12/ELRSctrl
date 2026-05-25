@@ -2,8 +2,13 @@
 /dist/
 *.exe
 
-# Local, machine-specific profile (commit config.example.yaml instead)
+# Local, machine-specific (commit config.example.yaml / CLAUDE.md instead)
 /config.yaml
+/CLAUDE.local.md
+
+# Hardware bring-up sweep logs (captured --sweep stdout/stderr)
+/sweep.out
+/sweep.err
 
 # Go
 /vendor/

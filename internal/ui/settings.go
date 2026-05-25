@@ -5,7 +5,7 @@ import (
 
 	"github.com/hajimehoshi/ebiten/v2"
 
-	"dronectrl/internal/config"
+	"elrsctrl/internal/config"
 )
 
 var baudPresets = []int{115200, 420000, 400000, 921600, 416666, 57600}

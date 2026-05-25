@@ -10,12 +10,12 @@ import (
 
 	"github.com/hajimehoshi/ebiten/v2"
 
-	"dronectrl/internal/channels"
-	"dronectrl/internal/config"
-	"dronectrl/internal/input"
-	"dronectrl/internal/sender"
-	"dronectrl/internal/serial"
-	"dronectrl/internal/state"
+	"elrsctrl/internal/channels"
+	"elrsctrl/internal/config"
+	"elrsctrl/internal/input"
+	"elrsctrl/internal/sender"
+	"elrsctrl/internal/serial"
+	"elrsctrl/internal/state"
 )
 
 const (

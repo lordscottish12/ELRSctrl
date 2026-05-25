@@ -3,8 +3,8 @@
 package channels
 
 import (
-	"dronectrl/internal/crsf"
-	"dronectrl/internal/input"
+	"elrsctrl/internal/crsf"
+	"elrsctrl/internal/input"
 )
 
 // MapType selects how a channel derives its value from its source(s).

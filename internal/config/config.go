@@ -11,9 +11,9 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"dronectrl/internal/channels"
-	"dronectrl/internal/crsf"
-	"dronectrl/internal/input"
+	"elrsctrl/internal/channels"
+	"elrsctrl/internal/crsf"
+	"elrsctrl/internal/input"
 )
 
 // SerialConfig selects the port and baud.

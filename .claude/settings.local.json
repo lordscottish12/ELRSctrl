@@ -5,7 +5,7 @@
       "WebFetch(domain:github.com)",
       "WebFetch(domain:ebitengine.org)",
       "WebFetch(domain:www.expresslrs.org)",
-      "Bash(file dist/dronectrl)",
+      "Bash(file dist/elrsctrl)",
       "Bash(ls *.yaml *.yml)",
       "Bash(ls config*.*)",
       "WebFetch(domain:manuals.plus)",

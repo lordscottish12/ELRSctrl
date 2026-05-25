@@ -11,9 +11,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"dronectrl/internal/crsf"
-	"dronectrl/internal/serial"
-	"dronectrl/internal/state"
+	"elrsctrl/internal/crsf"
+	"elrsctrl/internal/serial"
+	"elrsctrl/internal/state"
 )
 
 // Config holds the transmit parameters.

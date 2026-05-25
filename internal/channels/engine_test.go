@@ -3,8 +3,8 @@ package channels
 import (
 	"testing"
 
-	"dronectrl/internal/crsf"
-	"dronectrl/internal/input"
+	"elrsctrl/internal/crsf"
+	"elrsctrl/internal/input"
 )
 
 func stateWithAxis(src input.Source, v float64) input.State {

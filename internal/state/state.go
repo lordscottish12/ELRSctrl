@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"dronectrl/internal/crsf"
+	"elrsctrl/internal/crsf"
 )
 
 // Snapshot is the latest control output the sender should transmit.

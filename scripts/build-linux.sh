@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build dronectrl for the Steam Deck (linux/amd64) on a NATIVE Linux system.
+# Build elrsctrl for the Steam Deck (linux/amd64) on a NATIVE Linux system.
 #
 # Use this from WSL2 (Ubuntu) on a Windows dev machine, or inside a
 # distrobox/toolbox container on the Deck itself. Ebiten needs cgo plus the
@@ -73,16 +73,16 @@ fi
 
 # --- build -------------------------------------------------------------------
 mkdir -p dist
-echo "Building dist/dronectrl for Steam Deck (native linux/amd64)..."
-CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -trimpath -o dist/dronectrl ./cmd/dronectrl
+echo "Building dist/elrsctrl for Steam Deck (native linux/amd64)..."
+CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -trimpath -o dist/elrsctrl ./cmd/elrsctrl
 
-echo "Done -> dist/dronectrl"
+echo "Done -> dist/elrsctrl"
 
 # Report the highest glibc symbol the binary needs: it must be <= the Deck's
 # glibc or it won't start (SteamOS 3.x is ~glibc 2.37). Building on an older
 # distro (e.g. Ubuntu 22.04 = 2.35) is the safe side.
 if command -v objdump >/dev/null 2>&1; then
-  maxglibc="$(objdump -T dist/dronectrl 2>/dev/null \
+  maxglibc="$(objdump -T dist/elrsctrl 2>/dev/null \
     | grep -oE 'GLIBC_[0-9]+(\.[0-9]+)+' | sort -V | tail -n1 || true)"
   if [ -n "$maxglibc" ]; then
     echo "Requires up to $maxglibc -- must be <= the Deck's glibc (SteamOS 3.x ~= 2.37)."
