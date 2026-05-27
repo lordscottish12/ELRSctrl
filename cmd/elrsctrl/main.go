@@ -32,7 +32,7 @@ func main() {
 
 	var (
 		cfgPath    = flag.String("config", "config.yaml", "path to the YAML profile (created on first Save)")
-		port       = flag.String("port", "", "serial port override, e.g. COM5 or /dev/ttyACM0")
+		port       = flag.String("port", "", "serial port override, e.g. COM5 or /dev/ttyUSB0 (Aeris Link cp210x; not ttyACM0)")
 		baud       = flag.Int("baud", 0, "baud override (default from config; 115200 works over the Aeris Link USB/CP2102)")
 		addr       = flag.String("addr", "", "CRSF address override: 0xEE (transmitter) or 0xC8")
 		rate       = flag.Int("rate", 0, "transmit rate Hz override")

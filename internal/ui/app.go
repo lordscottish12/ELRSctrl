@@ -55,8 +55,15 @@ type Game struct {
 
 	prevPointerPressed bool // for our own mouse/touch click-edge detection (see readPointer)
 	prevRB, prevLB     bool // edge tracking for gamepad tab navigation
+	prevB              bool // edge tracking for B = cancel-bind
 
-	ports        []string
+	// Gamepad-driven virtual pointer, so the whole UI is operable from the
+	// controller alone (the Steam Deck has no reliable mouse/touch into the app).
+	// See readPointer / updateCursor / drawCursor.
+	cursorX, cursorY float64
+	bindReady        bool // bind mode has seen a neutral frame; safe to capture next actuation
+
+	ports        []serial.PortInfo
 	gamepads     []input.Device
 	status       string
 	statusFrames int
@@ -72,6 +79,8 @@ func New(cfg *config.Config, cfgPath string, store *state.Store, snd *sender.Sen
 		reader:     reader,
 		gamepadSel: -1,
 		in:         input.NewState(),
+		cursorX:    screenW / 2,
+		cursorY:    screenH / 2,
 	}
 	g.refreshPorts()
 	return g
@@ -83,7 +92,7 @@ func (g *Game) setStatus(format string, a ...any) {
 }
 
 func (g *Game) refreshPorts() {
-	ports, err := serial.List()
+	ports, err := serial.ListPorts()
 	if err != nil {
 		g.setStatus("port list error: %v", err)
 		return
@@ -101,14 +110,9 @@ func (g *Game) Update() error {
 	g.gamepads = input.List()
 	g.in = g.reader.Poll()
 
-	if g.bind != bindNone {
-		if src, ok := g.detectActiveSource(); ok {
-			g.assignBind(src)
-			g.bind = bindNone
-		}
-	}
-
+	g.updateBind()
 	g.applyArmKill()
+	g.updateCursor()
 
 	// Gamepad tab navigation: LB/RB cycle tabs, but only while disarmed (setup
 	// mode) and not mid-bind — so driving inputs and bind capture are never
@@ -134,6 +138,83 @@ func (g *Game) Update() error {
 		InputOK: g.in.Connected,
 	})
 	return nil
+}
+
+// updateBind drives bind-capture mode. It waits for one neutral frame before
+// capturing (bindReady) so the A press that *entered* bind mode — or a stick
+// still deflected from cursor navigation — isn't grabbed as the binding. B
+// cancels, which reserves B as the gamepad "back" button: to map B itself, step
+// the Source stepper to it rather than pressing it in bind mode.
+func (g *Game) updateBind() {
+	bCancel := g.in.Connected && g.in.Pressed(input.SrcB)
+	defer func() { g.prevB = bCancel }()
+
+	if g.bind == bindNone {
+		g.bindReady = false
+		return
+	}
+	if bCancel && !g.prevB {
+		g.bind = bindNone
+		g.setStatus("bind cancelled")
+		return
+	}
+	src, ok := g.detectActiveSource()
+	if !ok {
+		g.bindReady = true // neutral — arm capture for the next actuation
+		return
+	}
+	if g.bindReady {
+		g.assignBind(src)
+		g.bind = bindNone
+	}
+}
+
+// padCursorActive reports whether the gamepad-driven virtual cursor is live: only
+// while disarmed and not binding, mirroring the LB/RB tab-nav gate so the driving
+// sticks are never hijacked once armed, and bind capture isn't fighting a click.
+func (g *Game) padCursorActive() bool {
+	return g.in.Connected && !g.armed && g.bind == bindNone
+}
+
+// updateCursor moves the virtual cursor from the left stick (proportional) and the
+// d-pad (full-tilt), in screen pixels. Ebiten reports stick-up as -1, which maps
+// straight to a smaller y (cursor up), so no inversion is needed.
+func (g *Game) updateCursor() {
+	if !g.padCursorActive() {
+		return
+	}
+	const speed = 22.0 // px/frame at full deflection (~1 s to cross the screen at 60 fps)
+	dx := axisDeadzone(g.in.Analog(input.SrcLeftStickX))
+	dy := axisDeadzone(g.in.Analog(input.SrcLeftStickY))
+	if g.in.Pressed(input.SrcDLeft) {
+		dx -= 1
+	}
+	if g.in.Pressed(input.SrcDRight) {
+		dx += 1
+	}
+	if g.in.Pressed(input.SrcDUp) {
+		dy -= 1
+	}
+	if g.in.Pressed(input.SrcDDown) {
+		dy += 1
+	}
+	g.cursorX = clampF(g.cursorX+clampF(dx, -1, 1)*speed, 0, screenW-1)
+	g.cursorY = clampF(g.cursorY+clampF(dy, -1, 1)*speed, 0, screenH-1)
+}
+
+// axisDeadzone zeroes small stick noise and rescales the remainder to 0..1 so
+// motion ramps from a standstill just past the deadzone.
+func axisDeadzone(v float64) float64 {
+	const dz = 0.2
+	a := math.Abs(v)
+	if a < dz {
+		return 0
+	}
+	s := (a - dz) / (1 - dz)
+	if v < 0 {
+		return -s
+	}
+	return s
 }
 
 // detectActiveSource returns the most strongly actuated control, for bind mode.
@@ -226,6 +307,8 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		fillRect(screen, 0, 0, screenW, screenH, colDim)
 		drawTextC(screen, "Move a stick / trigger or press a button to bind…",
 			screenW/2, screenH/2-30, sizeTitle, colText)
+		drawTextC(screen, "press B (or tap Cancel) to back out",
+			screenW/2, screenH/2+6, sizeSmall, colTextDim)
 		if button(screen, p, screenW/2-90, screenH/2+40, 180, 54, "Cancel", colBad) {
 			g.bind = bindNone
 		}
@@ -234,6 +317,11 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	if g.statusFrames > 0 {
 		fillRect(screen, 0, screenH-30, screenW, 30, colPanel2)
 		drawText(screen, g.status, 12, screenH-26, sizeSmall, colWarn)
+	}
+
+	// Virtual cursor on top of everything, so the controller can drive the UI.
+	if g.padCursorActive() {
+		drawCursor(screen, float32(g.cursorX), float32(g.cursorY), g.in.Pressed(input.SrcA))
 	}
 }
 

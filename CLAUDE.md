@@ -109,7 +109,12 @@ they flow through automatically.
   at **115200** baud. Opening that port auto-resets the MCU, so `serial.Open` pulses
   a clean EN reset (gated by `--reset-pulse`, default on). The FTDI→JR-bay CRSF pin
   is an untested fallback for modules that don't expose CRSF on USB (no code change
-  needed). Module is powered via XT30 (2S).
+  needed). Module is powered via XT30 (2S). On Linux/the Deck the node is
+  `/dev/ttyUSB0` (cp210x); `/dev/ttyACM0` is the Deck's own Steam Controller — a trap
+  that opens cleanly but swallows every write. The Deck also can't drive the module
+  over a **direct USB-C↔USB-C** cable (the module's Type-C socket has no CC resistors,
+  so a USB-C host won't power or enumerate it) — it needs a **USB-A host path**
+  (powered hub / OTG adapter).
 - On the Steam Deck, run from **Desktop Mode** for clean raw gamepad access (Game
   Mode + Steam Input intercepts non-Steam games). The Settings screen has a gamepad
   picker for when Steam's virtual pad also appears.

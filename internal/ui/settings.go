@@ -16,16 +16,28 @@ func (g *Game) drawSettings(screen *ebiten.Image, p pointer) {
 
 	f := &form{screen: screen, p: p, x: x, w: w, y: tabH + 52, rowH: 50}
 
-	// Port.
-	portOpts := append([]string{"(none)"}, g.ports...)
-	portCur := indexOfStr(portOpts, displayPort(g.cfg.Serial.Port))
-	if d := f.stepper("Serial Port", portOpts[portCur]); d != 0 {
-		ni := wrap(portCur+d, len(portOpts))
-		if ni == 0 {
-			g.cfg.Serial.Port = ""
-		} else {
-			g.cfg.Serial.Port = portOpts[ni]
+	// Port. g.ports carries the Device to open plus a friendly Label to show. Build
+	// a choice list with a "(none)" sentinel; if a port is configured but not
+	// currently present (module unplugged), surface it so the user sees it instead
+	// of a misleading "(none)".
+	type portChoice struct{ device, label string }
+	choices := []portChoice{{"", "(none)"}}
+	for _, pi := range g.ports {
+		choices = append(choices, portChoice{pi.Device, pi.Label})
+	}
+	portCur := 0
+	for i, c := range choices {
+		if c.device == g.cfg.Serial.Port {
+			portCur = i
+			break
 		}
+	}
+	if g.cfg.Serial.Port != "" && choices[portCur].device != g.cfg.Serial.Port {
+		choices = append(choices, portChoice{g.cfg.Serial.Port, g.cfg.Serial.Port + "  (not connected)"})
+		portCur = len(choices) - 1
+	}
+	if d := f.wideStepper("Serial Port", trim(choices[portCur].label, 40), 480); d != 0 {
+		g.cfg.Serial.Port = choices[wrap(portCur+d, len(choices))].device
 		g.applyPort()
 	}
 
@@ -167,22 +179,6 @@ func (g *Game) reload() {
 	*g.cfg = c
 	g.applyAll()
 	g.setStatus("reloaded config")
-}
-
-func displayPort(p string) string {
-	if p == "" {
-		return "(none)"
-	}
-	return p
-}
-
-func indexOfStr(s []string, v string) int {
-	for i, x := range s {
-		if x == v {
-			return i
-		}
-	}
-	return 0
 }
 
 func indexOfInt(s []int, v int) int {

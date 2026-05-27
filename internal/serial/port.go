@@ -5,6 +5,9 @@ package serial
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	gs "go.bug.st/serial"
@@ -17,6 +20,77 @@ func List() ([]string, error) {
 		return nil, fmt.Errorf("list serial ports: %w", err)
 	}
 	return ports, nil
+}
+
+// PortInfo describes a serial port for the UI picker. Device is what you pass to
+// Open (e.g. "/dev/ttyUSB0" or "COM5"); Label is a human-friendly name derived
+// from /dev/serial/by-id when available (Linux), otherwise just the device.
+type PortInfo struct {
+	Device string
+	Label  string
+}
+
+// ListPorts enumerates serial ports with friendly labels, and hides devices that
+// are never a CRSF target — notably the Steam Deck's own built-in Steam
+// Controller, which exposes a /dev/ttyACM serial interface that looks pickable
+// but silently swallows writes: opening it "succeeds" yet nothing reaches the TX
+// module. Keep it out of the picker so it can't be selected by mistake.
+func ListPorts() ([]PortInfo, error) {
+	devices, err := gs.GetPortsList()
+	if err != nil {
+		return nil, fmt.Errorf("list serial ports: %w", err)
+	}
+	byID := serialByID() // device path -> /dev/serial/by-id descriptor (Linux; nil elsewhere)
+	out := make([]PortInfo, 0, len(devices))
+	for _, dev := range devices {
+		id := byID[dev]
+		if isExcludedPort(id) {
+			continue
+		}
+		label := dev
+		if id != "" {
+			label = friendlyName(id)
+		}
+		out = append(out, PortInfo{Device: dev, Label: label})
+	}
+	return out, nil
+}
+
+// serialByID maps each resolved /dev/ttyXXX to its /dev/serial/by-id descriptor
+// name. Linux-only; returns nil where that tree doesn't exist (e.g. Windows).
+func serialByID() map[string]string {
+	const dir = "/dev/serial/by-id"
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	m := make(map[string]string, len(entries))
+	for _, e := range entries {
+		target, err := filepath.EvalSymlinks(filepath.Join(dir, e.Name()))
+		if err != nil {
+			continue
+		}
+		m[target] = e.Name()
+	}
+	return m
+}
+
+// isExcludedPort reports whether a by-id descriptor names a device that should
+// never appear in the picker. The Steam Deck's built-in controller is the one we
+// know bites (see ListPorts).
+func isExcludedPort(byID string) bool {
+	return strings.Contains(strings.ToLower(byID), "steam_controller")
+}
+
+// friendlyName turns a /dev/serial/by-id descriptor like
+// "usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_Controller_0001-if00-port0" into
+// "Silicon Labs CP2102 USB to UART Bridge Controller 0001".
+func friendlyName(byID string) string {
+	s := strings.TrimPrefix(byID, "usb-")
+	if i := strings.Index(s, "-if"); i > 0 {
+		s = s[:i] // drop the trailing interface/port suffix
+	}
+	return strings.TrimSpace(strings.ReplaceAll(s, "_", " "))
 }
 
 // Port is an open serial connection.

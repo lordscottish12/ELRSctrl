@@ -6,6 +6,8 @@ package sender
 
 import (
 	"context"
+	"fmt"
+	"log"
 	"math"
 	"sync"
 	"sync/atomic"
@@ -104,7 +106,11 @@ func (s *Sender) ensurePort() {
 	s.mu.Unlock()
 
 	if reopen {
+		// An explicit port change (Settings → pick/Save) should take effect now,
+		// not wait out the failed-reconnect throttle below, so the Monitor reflects
+		// the new port immediately.
 		s.closePort()
+		s.lastOpenAttempt = time.Time{}
 	}
 	if s.port != nil {
 		return
@@ -157,6 +163,12 @@ func (s *Sender) failsafeBurst() {
 // triangle wave on the given 1-based channel while holding the rest centered, so
 // you can confirm a servo/ESC on the bound receiver moves before building a
 // mapping. Blocks until ctx is cancelled, then centers all channels.
+//
+// Writes run on a dedicated goroutine fed by a small drop-if-full queue, so a
+// stalled write (the link not draining — e.g. an ELRS module that never starts
+// reading the port) can't freeze the build loop. A twice-a-second heartbeat
+// reports whether frames are landing, stalling, or erroring, which is the whole
+// point of bring-up — the old version swallowed write errors silently.
 func Sweep(ctx context.Context, portName string, baud int, addr byte, channel, rateHz int, period time.Duration, resetPulse bool) error {
 	p, err := serial.Open(portName, baud, resetPulse)
 	if err != nil {
@@ -164,11 +176,7 @@ func Sweep(ctx context.Context, portName string, baud int, addr byte, channel, r
 	}
 	defer p.Close()
 
-	ticker := time.NewTicker(time.Second / time.Duration(rateHz))
-	defer ticker.Stop()
 	idx := channel - 1
-	start := time.Now()
-
 	centered := func() [crsf.NumChannels]uint16 {
 		var ch [crsf.NumChannels]uint16
 		for i := range ch {
@@ -177,11 +185,54 @@ func Sweep(ctx context.Context, portName string, baud int, addr byte, channel, r
 		return ch
 	}
 
+	// Writer goroutine owns every port write. inFlight holds the start time of an
+	// in-progress write (0 when idle) so the reporter can spot a write that's
+	// blocked because the device isn't draining its buffer.
+	frames := make(chan []byte, 8)
+	var sent, failed, dropped atomic.Uint64
+	var inFlight atomic.Int64
+	var lastErr atomic.Value // string
+	lastErr.Store("")
+	writerDone := make(chan struct{})
+	go func() {
+		defer close(writerDone)
+		for f := range frames {
+			inFlight.Store(time.Now().UnixNano())
+			err := p.Write(f)
+			inFlight.Store(0)
+			if err != nil {
+				failed.Add(1)
+				lastErr.Store(err.Error())
+			} else {
+				sent.Add(1)
+			}
+		}
+		_ = p.Write(crsf.BuildRCFrame(addr, centered())) // park centered on the way out
+	}()
+
+	ticker := time.NewTicker(time.Second / time.Duration(rateHz))
+	defer ticker.Stop()
+	report := time.NewTicker(500 * time.Millisecond)
+	defer report.Stop()
+	start := time.Now()
+
 	for {
 		select {
 		case <-ctx.Done():
-			_ = p.Write(crsf.BuildRCFrame(addr, centered()))
+			close(frames)
+			<-writerDone
 			return nil
+		case <-report.C:
+			msg := fmt.Sprintf("tx: %d ok, %d dropped, %d failed", sent.Load(), dropped.Load(), failed.Load())
+			if e, _ := lastErr.Load().(string); e != "" {
+				msg += " (last err: " + e + ")"
+			}
+			if t := inFlight.Load(); t != 0 {
+				if d := time.Since(time.Unix(0, t)); d > 200*time.Millisecond {
+					msg += fmt.Sprintf("  <-- WRITE STALLED %dms (device not reading this port?)", d.Milliseconds())
+				}
+			}
+			log.Print(msg)
 		case <-ticker.C:
 			phase := math.Mod(time.Since(start).Seconds(), period.Seconds()) / period.Seconds()
 			tri := 1 - math.Abs(2*phase-1) // 0 -> 1 -> 0 ramp
@@ -189,7 +240,11 @@ func Sweep(ctx context.Context, portName string, baud int, addr byte, channel, r
 			if idx >= 0 && idx < crsf.NumChannels {
 				ch[idx] = crsf.TicksMin + uint16(tri*float64(crsf.TicksMax-crsf.TicksMin))
 			}
-			_ = p.Write(crsf.BuildRCFrame(addr, ch))
+			select {
+			case frames <- crsf.BuildRCFrame(addr, ch):
+			default:
+				dropped.Add(1) // writer is blocked; don't let it back up the loop
+			}
 		}
 	}
 }

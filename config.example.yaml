@@ -2,8 +2,11 @@
 # tweak everything live in the app's Settings/Mapping screens and hit Save.
 
 serial:
-  port: ""        # "COM5" (Windows) or "/dev/ttyACM0" (Linux). Empty = pick in the UI.
+  port: ""        # "COM5" (Windows) or "/dev/ttyUSB0" (Linux/Deck, cp210x — NOT ttyACM0, that's the Deck's own controller). Empty = pick in the UI.
   baud: 115200    # handset-link UART; 115200 works over the Aeris Link USB/CP2102 (420000 is the over-air rate, not this).
+  # Module-side setup (CRSF pins 3/1, UART-inverted off, and connecting via USB-A —
+  # a direct USB-C↔USB-C link to the Deck won't even power it) lives in the README;
+  # these two app settings assume that's already done.
 
 sender:
   rate_hz: 250            # CRSF frames per second (50-500; 150 matches a handset).

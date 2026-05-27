@@ -8,6 +8,8 @@ import (
 	"github.com/hajimehoshi/ebiten/v2/text/v2"
 	"github.com/hajimehoshi/ebiten/v2/vector"
 	"golang.org/x/image/font/gofont/goregular"
+
+	"elrsctrl/internal/input"
 )
 
 // Logical screen size (Steam Deck native resolution).
@@ -114,6 +116,14 @@ type pointer struct {
 // ourselves keeps every widget (tabs, arm, steppers, BIND) clickable.
 func (g *Game) readPointer() pointer {
 	var p pointer
+	// Gamepad virtual cursor is the baseline pointer when active (Steam Deck has no
+	// dependable mouse/touch into the app); A is its click. Mouse/touch below take
+	// precedence whenever they're actually used (dev machine, or a USB mouse on the
+	// Deck), so nothing regresses on the desktop.
+	if g.padCursorActive() {
+		p.x, p.y = int(g.cursorX), int(g.cursorY)
+		p.pressed = g.in.Pressed(input.SrcA)
+	}
 	if ebiten.IsMouseButtonPressed(ebiten.MouseButtonLeft) {
 		p.pressed = true
 		p.x, p.y = ebiten.CursorPosition()
@@ -197,4 +207,16 @@ func channelBar(dst *ebiten.Image, x, y, w, h float32, value, min, max int) {
 	fillRect(dst, x, y, w*frac, h, colAccent)
 	// center tick
 	fillRect(dst, x+w/2-1, y, 2, h, colTextDim)
+}
+
+// drawCursor draws the gamepad virtual pointer as a reticle whose center is the
+// hotspot (the pointer's x,y). A dark halo keeps it visible on light fills; the
+// ring fills in while the click button (A) is held.
+func drawCursor(dst *ebiten.Image, x, y float32, pressed bool) {
+	if pressed {
+		vector.DrawFilledCircle(dst, x, y, 11, color.RGBA{0x4a, 0x90, 0xd9, 0x70}, true)
+	}
+	vector.StrokeCircle(dst, x, y, 12, 4, color.RGBA{0x00, 0x00, 0x00, 0xc0}, true)
+	vector.StrokeCircle(dst, x, y, 12, 2, colAccent, true)
+	vector.DrawFilledCircle(dst, x, y, 3, colText, true)
 }

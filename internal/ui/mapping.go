@@ -152,6 +152,14 @@ func (f *form) stepper(label, value string) int {
 	return stepper(f.screen, f.p, f.x+f.w-sw, y, sw, f.ctrlH(), value)
 }
 
+// wideStepper is stepper with a caller-chosen value-box width, for long values
+// like serial-port names that don't fit the default 220px box.
+func (f *form) wideStepper(label, value string, sw float32) int {
+	y := f.advance()
+	drawText(f.screen, label, float64(f.x), f.labelY(y), sizeLabel, colTextDim)
+	return stepper(f.screen, f.p, f.x+f.w-sw, y, sw, f.ctrlH(), value)
+}
+
 func (f *form) toggle(label string, on bool) bool {
 	y := f.advance()
 	drawText(f.screen, label, float64(f.x), f.labelY(y), sizeLabel, colTextDim)

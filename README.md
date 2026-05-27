@@ -29,10 +29,11 @@ You need to get **CRSF serial data + power** into the module:
 - **Power:** the module's **XT30** input (2S / ~8.4 V recommended). USB only powers
   the MCU — the RF stage needs the battery to actually transmit.
 - **Data (pick one):**
-  - **USB-C → CRSF (verified on the EMAX Aeris Link):** connect the Deck/PC to the
-    module's Type-C port. On the Aeris Link the USB is a **CP2102** bridge wired to
-    the main MCU's **UART0**, so you point ELRS's CRSF serial at those pins and match
-    the bridge's polarity/baud. In the module's web UI (join its WiFi AP, then
+  - **USB-C → CRSF (verified on the EMAX Aeris Link):** the module's USB is a
+    **CP2102** bridge wired to the main MCU's **UART0** (GPIO 1/3). ELRS ships with
+    CRSF on the **JR-bay pin** instead, which the USB bridge can't see — so the pin
+    remap below is **mandatory** for the USB path, not optional tuning: it's what puts
+    CRSF on the USB port at all. In the module's web UI (join its WiFi AP, then
     `http://10.0.0.1`): set **CRSF Serial RX = 3, TX = 1** (`/hardware.html`), turn
     **UART inverted OFF** (Options tab), and keep the **Backpack disabled**. The port
     shows up as `COMx` (Windows) or `/dev/ttyUSB0` (Linux, cp210x driver — *not*
@@ -40,8 +41,21 @@ You need to get **CRSF serial data + power** into the module:
   - **FTDI → JR-bay CRSF pin (fallback, not tested here):** wire a **3.3 V** USB-serial
     adapter's TX to the module's CRSF pin (JR bay, half-duplex). With UART-inverted
     **off** a plain non-inverted adapter works; with it on you'd need an inverting one.
+
+> **⚠️ Cabling — a direct USB-C↔USB-C link to the Deck does *not* work.** The Aeris
+> Link's Type-C socket is wired as a plain USB-2 device with **no USB-C CC resistors**,
+> so a USB-C *host* (the Deck's only port) never detects it or switches on VBUS — the
+> module stays dark and never enumerates (the tell: it won't even power up over the
+> cable). A **USB-A host always supplies power + data**, which is why a plain
+> **USB-A→C cable from a PC just works**. On the Deck, give it a USB-A path: a
+> **powered USB-C hub/dock** with the module in one of its **USB-A** ports (via the
+> USB-A→C cable), or a **USB-C→USB-A-female OTG adapter**. The **XT30 battery powers
+> the RF stage but does *not* fix this** — it's a USB data/detection problem, not a
+> power-budget one.
+
 - **Charging the Deck while connected:** the Deck has one USB-C port, so use a
-  **USB-C hub/dock** with passthrough power if you want to charge while driving.
+  **USB-C hub/dock** with passthrough power if you want to charge while driving (the
+  same hub gives you the USB-A port the module needs, above).
 
 > **⚙️ Verified EMAX Aeris Link config (USB-C):** module web UI → CRSF serial
 > **pins 3/1**, **UART inverted = off**, backpack off; elrsctrl **`--baud 115200`**,
@@ -101,6 +115,12 @@ builds **on the Deck** in a distrobox/toolbox container (same packages,
 ---
 
 ## 3. Deploy & run on the Steam Deck
+
+> **Cabling reminder:** the Deck's single USB-C port **can't drive the module
+> directly** — connect the module through a powered hub's **USB-A** port (see the §1
+> cabling note). Also: the right serial node is `/dev/ttyUSB0` (cp210x); the Deck's
+> own built-in controller shows up as `/dev/ttyACM0`, which is a trap — opening it
+> "succeeds" but silently swallows every frame.
 
 1. Copy `dist/elrsctrl` and a `config.yaml` (start from `config.example.yaml`) to
    `~/elrsctrl/` on the Deck and `chmod +x elrsctrl`.
@@ -187,6 +207,11 @@ unit tests are in [`internal/crsf`](internal/crsf).
 
 ## 7. Troubleshooting
 
+- **Module won't power up / no serial port over USB-C:** a **direct USB-C↔USB-C** link
+  to the Deck won't power or enumerate the Aeris Link (its Type-C socket has no CC
+  resistors). Use a **USB-A host path** — a powered hub/dock with the module in a
+  **USB-A** port, or a USB-C→USB-A-female OTG adapter. XT30 power alone won't fix it
+  (see §1).
 - **No port listed:** check the cable/driver; on Linux ensure your user can access
   the device (`sudo usermod -aG dialout,uucp $USER`, then re-login) or run with
   access to `/dev/ttyACM*`.
