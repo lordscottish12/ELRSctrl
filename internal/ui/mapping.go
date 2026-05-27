@@ -67,6 +67,13 @@ func (g *Game) drawChannelEditor(screen *ebiten.Image, p pointer) {
 		if d := f.stepper("Expo", fmt.Sprintf("%.1f", c.Expo)); d != 0 {
 			c.Expo = clampF(c.Expo+0.1*float64(d), -1, 1)
 		}
+		scale := c.Scale
+		if scale <= 0 {
+			scale = 1
+		}
+		if d := f.stepper("Scale (rate)", fmt.Sprintf("%.2f", scale)); d != 0 {
+			c.Scale = clampF(scale+0.05*float64(d), 0.1, 2)
+		}
 		if d := f.stepper("Deadzone", fmt.Sprintf("%.2f", c.Deadzone)); d != 0 {
 			c.Deadzone = clampF(c.Deadzone+0.05*float64(d), 0, 0.9)
 		}

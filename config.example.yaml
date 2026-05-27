@@ -32,7 +32,8 @@ channels:
     type: analog
     source: left_stick_x
     reverse: false
-    expo: 0.0             # -1..1; >0 softens around center
+    expo: 0.0             # -1..1; >0 softens response near center (finer control), <0 sharpens
+    scale: 1.0           # input multiplier / "rate": <1 = gentler/less sensitive, 1 = full (up to 2)
     deadzone: 0.0         # 0..0.9 fraction ignored near rest
     trim: 0               # ticks added after scaling
     min: 172
@@ -42,6 +43,8 @@ channels:
   - name: Throttle        # CH2 — R2 forward / L2 reverse
     type: analog
     source: triggers
+    expo: 0.4             # finer control near idle/center — tames a touchy low end
+    scale: 1.0           # drop below 1 to cap overall sensitivity (e.g. 0.6 = gentler throttle)
     min: 172
     max: 1811
     failsafe: 992         # neutral = stop for a bidirectional ESC

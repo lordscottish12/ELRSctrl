@@ -79,6 +79,10 @@ func (e *Engine) applyOne(i int, c Channel, in input.State) uint16 {
 
 func analogValue(c Channel, in input.State) uint16 {
 	raw := in.Analog(c.Source)
+	scale := c.Scale
+	if scale <= 0 {
+		scale = 1 // 0/unset means no scaling (kept out of YAML by omitempty)
+	}
 
 	if c.Source.Bipolar() {
 		x := raw
@@ -87,18 +91,22 @@ func analogValue(c Channel, in input.State) uint16 {
 		}
 		x = deadzoneBipolar(x, c.Deadzone)
 		x = expo(x, c.Expo)
+		x = clampBipolar(x * scale) // "rate": <1 gentler, >1 saturates sooner; endpoints stay the limit
 		mid := float64(c.Min+c.Max) / 2
 		half := float64(c.Max-c.Min) / 2
 		v := mid + x*half + float64(c.Trim)
 		return crsf.ClampTicks(int(math.Round(v)))
 	}
 
-	// Unipolar (single trigger), 0..1.
+	// Unipolar (single trigger), 0..1. Expo softens the low/idle end here, mirroring
+	// how it softens around center on the bipolar path.
 	x := clamp01(raw)
 	if c.Reverse {
 		x = 1 - x
 	}
 	x = deadzoneUnipolar(x, c.Deadzone)
+	x = expo(x, c.Expo)
+	x = clamp01(x * scale)
 	v := float64(c.Min) + x*float64(c.Max-c.Min) + float64(c.Trim)
 	return crsf.ClampTicks(int(math.Round(v)))
 }
@@ -120,6 +128,18 @@ func FailsafeValues(chans []Channel) [crsf.NumChannels]uint16 {
 func clamp01(x float64) float64 {
 	if x < 0 {
 		return 0
+	}
+	if x > 1 {
+		return 1
+	}
+	return x
+}
+
+// clampBipolar bounds x to [-1, 1] so a scale > 1 saturates at the endpoints
+// rather than driving the output past them.
+func clampBipolar(x float64) float64 {
+	if x < -1 {
+		return -1
 	}
 	if x > 1 {
 		return 1

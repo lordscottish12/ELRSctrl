@@ -29,6 +29,7 @@ type Channel struct {
 	Reverse  bool    `yaml:"reverse,omitempty"`
 	Deadzone float64 `yaml:"deadzone,omitempty"` // 0..1 fraction ignored around rest
 	Expo     float64 `yaml:"expo,omitempty"`     // -1..1; >0 softens center, <0 sharpens
+	Scale    float64 `yaml:"scale,omitempty"`    // input multiplier / "rate"; 0 or unset = 1.0 (no scaling)
 	Trim     int     `yaml:"trim,omitempty"`     // ticks added after scaling
 	Min      int     `yaml:"min"`                // low endpoint (ticks)
 	Max      int     `yaml:"max"`                // high endpoint (ticks)

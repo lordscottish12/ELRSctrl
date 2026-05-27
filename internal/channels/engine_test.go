@@ -91,6 +91,49 @@ func TestUnipolarTrigger(t *testing.T) {
 	}
 }
 
+func TestAnalogScale(t *testing.T) {
+	var e Engine
+	full := analogCh(input.SrcLeftStickX)
+	scaled := analogCh(input.SrcLeftStickX)
+	scaled.Scale = 0.5
+
+	// Scaling the input by 0.5 must equal feeding half the deflection at scale 1.
+	a := e.applyOne(0, scaled, stateWithAxis(input.SrcLeftStickX, 1))
+	b := e.applyOne(0, full, stateWithAxis(input.SrcLeftStickX, 0.5))
+	if a != b {
+		t.Errorf("scale 0.5 @ full = %d, want it to equal scale 1.0 @ half = %d", a, b)
+	}
+	// Center is unaffected by scale.
+	if got := e.applyOne(0, scaled, stateWithAxis(input.SrcLeftStickX, 0)); got != crsf.TicksMid {
+		t.Errorf("scaled center = %d, want %d", got, crsf.TicksMid)
+	}
+	// Zero/unset scale is treated as 1.0 (no scaling), so every existing config is unchanged.
+	zero := analogCh(input.SrcLeftStickX) // Scale defaults to 0
+	if got := e.applyOne(0, zero, stateWithAxis(input.SrcLeftStickX, 1)); got != crsf.TicksMax {
+		t.Errorf("scale 0 (=1.0) full+ = %d, want %d", got, crsf.TicksMax)
+	}
+}
+
+func TestUnipolarExpo(t *testing.T) {
+	var e Engine
+	c := analogCh(input.SrcRightTrigger) // unipolar 0..1
+	c.Expo = 0.5                         // soften the low/idle end
+
+	// Endpoints are unchanged by expo.
+	if got := e.applyOne(0, c, stateWithAxis(input.SrcRightTrigger, 0)); got != crsf.TicksMin {
+		t.Errorf("expo trigger 0 = %d, want %d", got, crsf.TicksMin)
+	}
+	if got := e.applyOne(0, c, stateWithAxis(input.SrcRightTrigger, 1)); got != crsf.TicksMax {
+		t.Errorf("expo trigger 1 = %d, want %d", got, crsf.TicksMax)
+	}
+	// Half throw with expo>0 sits below the linear midpoint (softer near idle).
+	lin := e.applyOne(0, analogCh(input.SrcRightTrigger), stateWithAxis(input.SrcRightTrigger, 0.5))
+	soft := e.applyOne(0, c, stateWithAxis(input.SrcRightTrigger, 0.5))
+	if soft >= lin {
+		t.Errorf("expo>0 at half throw = %d, want less than linear %d", soft, lin)
+	}
+}
+
 func TestSwitch2Momentary(t *testing.T) {
 	var e Engine
 	c := DefaultChannel("t")
