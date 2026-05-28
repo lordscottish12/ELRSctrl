@@ -53,6 +53,11 @@ You need to get **CRSF serial data + power** into the module:
 > the RF stage but does *not* fix this** — it's a USB data/detection problem, not a
 > power-budget one.
 
+![Steam Deck driving the Aeris Link through a USB-A hub](docs/steamdeck_usb2_setup.png)
+
+*Working setup on the Deck: a USB-C hub on the Deck's port, module plugged into one
+of the hub's USB-A ports via a USB-A→C cable, XT30 battery powering the RF stage.*
+
 - **Charging the Deck while connected:** the Deck has one USB-C port, so use a
   **USB-C hub/dock** with passthrough power if you want to charge while driving (the
   same hub gives you the USB-A port the module needs, above).
