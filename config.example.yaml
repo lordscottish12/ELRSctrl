@@ -52,7 +52,10 @@ channels:
   - name: Aux1            # CH3 — A button toggles
     type: switch2
     source: a
-    momentary: false
+    # press_mode: toggle    # default; click flips Low<->High
+    # press_mode: momentary # held = High, released = Low
+    # press_mode: pulse     # held = oscillate Low<->High; pulse_hz sets the rate (default 4)
+    # pulse_hz: 4
     low: 172
     high: 1811
     failsafe: 992

@@ -13,9 +13,18 @@ type MapType string
 const (
 	TypeNone    MapType = "none"    // channel holds center (992)
 	TypeAnalog  MapType = "analog"  // proportional from an analog source
-	TypeSwitch2 MapType = "switch2" // one button -> Low/High (toggle or momentary)
+	TypeSwitch2 MapType = "switch2" // one button -> Low/High (see PressMode)
 	TypeSwitch3 MapType = "switch3" // two buttons -> Low/Mid/High
 	TypeFixed   MapType = "fixed"   // constant value
+)
+
+// PressMode selects how a switch2 channel responds to its button.
+type PressMode string
+
+const (
+	PressToggle    PressMode = "toggle"    // click flips Low<->High; default
+	PressMomentary PressMode = "momentary" // held = High, released = Low
+	PressPulse     PressMode = "pulse"     // held = oscillate Low<->High at PulseHz; released = Low
 )
 
 // Channel is the configuration for a single RC channel.
@@ -35,10 +44,16 @@ type Channel struct {
 	Max      int     `yaml:"max"`                // high endpoint (ticks)
 
 	// Switch positions (ticks).
-	Low       int  `yaml:"low,omitempty"`
-	Mid       int  `yaml:"mid,omitempty"`
-	High      int  `yaml:"high,omitempty"`
-	Momentary bool `yaml:"momentary,omitempty"` // switch2: hold vs. toggle
+	Low       int       `yaml:"low,omitempty"`
+	Mid       int       `yaml:"mid,omitempty"`
+	High      int       `yaml:"high,omitempty"`
+	PressMode PressMode `yaml:"press_mode,omitempty"` // switch2 only; default = toggle
+	PulseHz   int       `yaml:"pulse_hz,omitempty"`   // switch2 pulse mode: full cycles per second (default 4)
+
+	// Deprecated: switch2 hold-vs-toggle bool; superseded by PressMode. Kept so
+	// older YAML still loads — normalize() migrates "momentary: true" to
+	// PressMode=momentary and clears this field.
+	Momentary bool `yaml:"momentary,omitempty"`
 
 	Fixed    int `yaml:"fixed,omitempty"`   // value for TypeFixed
 	Failsafe int `yaml:"failsafe"`          // value sent while disarmed / on input loss

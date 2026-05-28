@@ -72,16 +72,21 @@ snapshot. Every version-sensitive Ebiten/`text/v2`/`vector` call is isolated in
 decision: it transmits each channel's **failsafe** value (not live values) whenever
 `!Armed`, `!InputOK` (gamepad gone), or the snapshot is stale (UI stalled). The app
 boots disarmed; arm/kill are gamepad bindings in `config.Safety` (default Menu =
-arm toggle, View = kill) and also Monitor-screen buttons; gamepad disconnect
-auto-disarms; exit sends a short failsafe burst. When touching throttle logic,
-preserve "neutral/off is the failsafe."
+arm toggle, View = kill) and also Monitor-screen buttons. A **hardcoded panic-kill
+chord** — LB+RB held ≥ 500 ms while armed — always disarms regardless of binding,
+so a stuck/intercepted Kill button (e.g. Steam Input eating Menu/View on the Deck)
+isn't a trap: the cursor is hidden while armed, so this chord is the guaranteed
+escape. Gamepad disconnect auto-disarms; exit sends a short failsafe burst. When
+touching throttle logic, preserve "neutral/off is the failsafe."
 
 **Mapping engine (`internal/channels`).** `Engine.Apply(chans, inputState)` →
 `[16]uint16` CRSF ticks. Channel types: `analog` (reverse/expo/deadzone/trim/
-endpoints), `switch2` (button → low/high, toggle or momentary — stateful, needs
-rising-edge detection so `Engine` is stateful), `switch3` (two buttons →
-low/mid/high), `fixed`, `none`. This package + `crsf` hold the only unit tests; keep
-them green when changing mapping math.
+endpoints), `switch2` (button → low/high; `PressMode` = toggle / momentary /
+pulse — pulse runs a 50/50 square wave at `PulseHz` while held, used for repeated
+trigger pulls e.g. a nerf-gun servo. Engine is stateful for rising-edge toggling
+and the pulse timer), `switch3` (two buttons → low/mid/high), `fixed`, `none`. This
+package + `crsf` hold the only unit tests; keep them green when changing mapping
+math.
 
 **CRSF (`internal/crsf`).** RC_CHANNELS_PACKED: `[addr=0xEE][len=0x18][type=0x16]
 [16ch × 11-bit, LSB-first][CRC8]`, CRC8 = DVB-S2 (poly 0xD5) over `[type+payload]`.

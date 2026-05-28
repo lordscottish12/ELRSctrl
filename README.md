@@ -15,6 +15,10 @@ Steam Deck gamepad ─▶ mapping engine ─▶ CRSF frames ─▶ [serial] ─�
 > - The app boots **DISARMED** and transmits **failsafe** values until you arm it.
 > - Arm/Kill are bound to gamepad buttons (default **Menu** = arm, **View** = kill)
 >   and are also big buttons on the Monitor screen.
+> - **Panic kill:** hold **LB+RB together for 500 ms** to force-disarm, regardless
+>   of mapping or platform. Always works — even if Steam Input is eating your
+>   configured Kill button (the gamepad cursor is hidden while armed, so this
+>   chord is your guaranteed escape).
 > - It auto-disarms if the gamepad disconnects or the UI stalls, and sends a
 >   failsafe burst on exit.
 > - **Test with the wheels off the ground / motor disconnected first.** Set a
@@ -38,6 +42,13 @@ You need to get **CRSF serial data + power** into the module:
     **UART inverted OFF** (Options tab), and keep the **Backpack disabled**. The port
     shows up as `COMx` (Windows) or `/dev/ttyUSB0` (Linux, cp210x driver — *not*
     `ttyACM0`). Then run elrsctrl at **115200** baud.
+
+    ![Aeris Link web UI: CRSF Serial Pins set to RX=3, TX=1](docs/pin_changes.png)
+
+    *In `http://10.0.0.1/hardware.html` → CRSF Serial Pins: **RX pin = 3**, **TX pin = 1**
+    (circled). The yellow "hardware configuration has been customised" banner is
+    expected after the change.*
+
   - **FTDI → JR-bay CRSF pin (fallback, not tested here):** wire a **3.3 V** USB-serial
     adapter's TX to the module's CRSF pin (JR bay, half-duplex). With UART-inverted
     **off** a plain non-inverted adapter works; with it on you'd need an inverting one.

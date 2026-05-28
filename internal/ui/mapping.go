@@ -88,8 +88,17 @@ func (g *Game) drawChannelEditor(screen *ebiten.Image, p pointer) {
 		}
 
 	case channels.TypeSwitch2:
-		if f.toggle("Momentary", c.Momentary) {
-			c.Momentary = !c.Momentary
+		if d := f.stepper("Press Mode", pressModeLabel(c.PressMode)); d != 0 {
+			c.PressMode = cyclePressMode(c.PressMode, d)
+		}
+		if c.PressMode == channels.PressPulse {
+			hz := c.PulseHz
+			if hz <= 0 {
+				hz = 4
+			}
+			if d := f.stepper("Pulse Hz", strconv.Itoa(hz)); d != 0 {
+				c.PulseHz = clampI(hz+d, 1, 20)
+			}
 		}
 		if f.toggle("Reverse", c.Reverse) {
 			c.Reverse = !c.Reverse
@@ -207,6 +216,37 @@ func cycleType(t channels.MapType, d int) channels.MapType {
 		}
 	}
 	return typeOrder[wrap(i+d, len(typeOrder))]
+}
+
+// Empty PressMode is the "toggle" default — match it under the toggle slot so
+// the stepper shows "Toggle" instead of nothing on old configs.
+var pressModeOrder = []channels.PressMode{
+	channels.PressToggle, channels.PressMomentary, channels.PressPulse,
+}
+
+func cyclePressMode(m channels.PressMode, d int) channels.PressMode {
+	if m == "" {
+		m = channels.PressToggle
+	}
+	i := 0
+	for k, v := range pressModeOrder {
+		if v == m {
+			i = k
+			break
+		}
+	}
+	return pressModeOrder[wrap(i+d, len(pressModeOrder))]
+}
+
+func pressModeLabel(m channels.PressMode) string {
+	switch m {
+	case channels.PressMomentary:
+		return "Momentary"
+	case channels.PressPulse:
+		return "Pulse"
+	default:
+		return "Toggle"
+	}
 }
 
 func cycleSource(s input.Source, d int) input.Source {

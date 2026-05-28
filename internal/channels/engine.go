@@ -2,25 +2,29 @@ package channels
 
 import (
 	"math"
+	"time"
 
 	"elrsctrl/internal/crsf"
 	"elrsctrl/internal/input"
 )
 
 // Engine evaluates a mapping each frame. It is stateful because toggle switches
-// remember their position and need rising-edge detection.
+// remember their position and pulse mode flips on a wall-clock timer.
 type Engine struct {
-	toggle  [crsf.NumChannels]bool
-	prevBtn [crsf.NumChannels]bool
+	toggle      [crsf.NumChannels]bool
+	prevBtn     [crsf.NumChannels]bool
+	pulseOn     [crsf.NumChannels]bool      // current half of the pulse cycle while held
+	pulseFlipAt [crsf.NumChannels]time.Time // wall-clock instant to flip pulseOn next
 }
 
-// Apply evaluates all channels against the current input snapshot. Channels
-// beyond len(chans) are centered.
-func (e *Engine) Apply(chans []Channel, in input.State) [crsf.NumChannels]uint16 {
+// Apply evaluates all channels against the current input snapshot. now drives
+// the pulse-mode timer; pass time.Now() in production. Channels beyond
+// len(chans) are centered.
+func (e *Engine) Apply(chans []Channel, in input.State, now time.Time) [crsf.NumChannels]uint16 {
 	var out [crsf.NumChannels]uint16
 	for i := 0; i < crsf.NumChannels; i++ {
 		if i < len(chans) {
-			out[i] = e.applyOne(i, chans[i], in)
+			out[i] = e.applyOne(i, chans[i], in, now)
 		} else {
 			out[i] = crsf.TicksMid
 		}
@@ -28,7 +32,7 @@ func (e *Engine) Apply(chans []Channel, in input.State) [crsf.NumChannels]uint16
 	return out
 }
 
-func (e *Engine) applyOne(i int, c Channel, in input.State) uint16 {
+func (e *Engine) applyOne(i int, c Channel, in input.State, now time.Time) uint16 {
 	switch c.Type {
 	case TypeFixed:
 		return crsf.ClampTicks(c.Fixed)
@@ -36,9 +40,12 @@ func (e *Engine) applyOne(i int, c Channel, in input.State) uint16 {
 	case TypeSwitch2:
 		pressed := in.Pressed(c.Source)
 		var on bool
-		if c.Momentary {
+		switch c.PressMode {
+		case PressMomentary:
 			on = pressed
-		} else {
+		case PressPulse:
+			on = e.updatePulse(i, pressed, c.PulseHz, now)
+		default: // PressToggle and unset
 			if pressed && !e.prevBtn[i] { // rising edge toggles
 				e.toggle[i] = !e.toggle[i]
 			}
@@ -109,6 +116,31 @@ func analogValue(c Channel, in input.State) uint16 {
 	x = clamp01(x * scale)
 	v := float64(c.Min) + x*float64(c.Max-c.Min) + float64(c.Trim)
 	return crsf.ClampTicks(int(math.Round(v)))
+}
+
+// updatePulse advances the pulse-mode square wave for channel i. Released = Low
+// (and resets the timer so the next press starts cleanly at High). Held = flip
+// pulseOn whenever wall-clock crosses pulseFlipAt; half-period = 1/(2*hz).
+func (e *Engine) updatePulse(i int, pressed bool, hz int, now time.Time) bool {
+	if !pressed {
+		e.pulseOn[i] = false
+		e.pulseFlipAt[i] = time.Time{}
+		return false
+	}
+	if hz <= 0 {
+		hz = 4
+	}
+	half := time.Second / time.Duration(2*hz)
+	if e.pulseFlipAt[i].IsZero() { // first frame of a new press: snap High and schedule the drop
+		e.pulseOn[i] = true
+		e.pulseFlipAt[i] = now.Add(half)
+		return true
+	}
+	for !now.Before(e.pulseFlipAt[i]) { // catches up if Apply was called late (UI stall)
+		e.pulseOn[i] = !e.pulseOn[i]
+		e.pulseFlipAt[i] = e.pulseFlipAt[i].Add(half)
+	}
+	return e.pulseOn[i]
 }
 
 // FailsafeValues returns the configured failsafe value for each channel; used by

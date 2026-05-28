@@ -7,6 +7,7 @@ package ui
 import (
 	"fmt"
 	"math"
+	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
 
@@ -44,9 +45,10 @@ type Game struct {
 	reader  *input.Reader
 	engine  channels.Engine
 
-	in      input.State
-	armed   bool
-	prevArm bool
+	in             input.State
+	armed          bool
+	prevArm        bool
+	panicKillSince time.Time // wall-clock when LB+RB chord started (zero = chord not held)
 
 	tab        int
 	selCh      int
@@ -129,7 +131,7 @@ func (g *Game) Update() error {
 	}
 	g.prevRB, g.prevLB = rb, lb
 
-	live := g.engine.Apply(g.cfg.Channels, g.in)
+	live := g.engine.Apply(g.cfg.Channels, g.in, time.Now())
 	fs := channels.FailsafeValues(g.cfg.Channels)
 	g.store.SetSnapshot(state.Snapshot{
 		Live:    live,
@@ -262,11 +264,35 @@ func (g *Game) autoType(i int, src input.Source) {
 	}
 }
 
+// panicKillHold is how long LB+RB must be held to force-disarm. Long enough that
+// an incidental simultaneous bumper press while driving won't trip it; short
+// enough to feel like a real escape.
+const panicKillHold = 500 * time.Millisecond
+
 func (g *Game) applyArmKill() {
 	if !g.in.Connected {
 		g.armed = false
 		g.prevArm = false
+		g.panicKillSince = time.Time{}
 		return
+	}
+	// Panic-kill chord: LB+RB held >= panicKillHold while armed always disarms,
+	// bypassing the configurable Kill binding. This is the guaranteed escape when
+	// the regular Kill button isn't reaching the app (e.g. Steam Input intercepts
+	// Menu/View on the Deck) and the cursor is gone because we're armed.
+	both := g.in.Pressed(input.SrcLB) && g.in.Pressed(input.SrcRB)
+	switch {
+	case !both || !g.armed:
+		g.panicKillSince = time.Time{}
+	case g.panicKillSince.IsZero():
+		g.panicKillSince = time.Now()
+	case time.Since(g.panicKillSince) >= panicKillHold:
+		g.armed = false
+		g.panicKillSince = time.Time{}
+		g.setStatus("PANIC KILL — disarmed (LB+RB)")
+	default:
+		remaining := panicKillHold - time.Since(g.panicKillSince)
+		g.setStatus("Hold LB+RB to KILL… %d ms", remaining/time.Millisecond)
 	}
 	if g.cfg.Safety.KillSource != input.SrcNone && g.in.Pressed(g.cfg.Safety.KillSource) {
 		g.armed = false
