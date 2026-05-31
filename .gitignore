@@ -5,6 +5,7 @@
 # Local, machine-specific (commit config.example.yaml / CLAUDE.md instead)
 /config.yaml
 /CLAUDE.local.md
+.claude/settings.local.json
 
 # Hardware bring-up sweep logs (captured --sweep stdout/stderr)
 /sweep.out
