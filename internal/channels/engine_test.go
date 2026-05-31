@@ -138,6 +138,118 @@ func TestUnipolarExpo(t *testing.T) {
 	}
 }
 
+func rateCh(src input.Source) Channel {
+	c := analogCh(src)
+	c.Mode = ModeRate
+	c.SweepSecs = 2.0 // center->endpoint = half a sweep = 1s at full deflection
+	return c
+}
+
+// drive integrates a held axis value over n steps of 0.1s (the dt cap), returning
+// the last output. The first call seeds position at center.
+func drive(e *Engine, c Channel, in input.State, start time.Time, steps int) (uint16, time.Time) {
+	now := start
+	got := e.applyOne(0, c, in, now) // seed
+	for i := 0; i < steps; i++ {
+		now = now.Add(100 * time.Millisecond)
+		got = e.applyOne(0, c, in, now)
+	}
+	return got, now
+}
+
+func TestRateSweepReachesEndpoint(t *testing.T) {
+	var e Engine
+	e.armed = true
+	c := rateCh(input.SrcLeftStickX)
+	full := stateWithAxis(input.SrcLeftStickX, 1)
+
+	// Seed sits at center.
+	if got := e.applyOne(0, c, full, t0); got != crsf.TicksMid {
+		t.Fatalf("seed = %d, want center %d", got, crsf.TicksMid)
+	}
+	// Full deflection for 1s (center->Max = half of the 2s sweep) hits Max...
+	got, now := drive(&e, c, full, t0, 10)
+	if got != crsf.TicksMax {
+		t.Fatalf("after 1s @ full = %d, want Max %d", got, crsf.TicksMax)
+	}
+	// ...and holding longer clamps at Max rather than overshooting.
+	if got := e.applyOne(0, c, full, now.Add(time.Second)); got != crsf.TicksMax {
+		t.Fatalf("overdriven = %d, want clamped Max %d", got, crsf.TicksMax)
+	}
+}
+
+func TestRateHoldsWhenCentered(t *testing.T) {
+	var e Engine
+	e.armed = true
+	c := rateCh(input.SrcLeftStickX)
+
+	// Push for 0.5s, then release the stick to center.
+	moved, now := drive(&e, c, stateWithAxis(input.SrcLeftStickX, 1), t0, 5)
+	if moved <= crsf.TicksMid {
+		t.Fatalf("expected position above center after driving, got %d", moved)
+	}
+	center := stateWithAxis(input.SrcLeftStickX, 0)
+	var held uint16
+	for i := 0; i < 5; i++ {
+		now = now.Add(100 * time.Millisecond)
+		held = e.applyOne(0, c, center, now)
+	}
+	if held != moved {
+		t.Errorf("centering the stick moved position: held %d, want it to stay at %d", held, moved)
+	}
+}
+
+func TestRateFreezesWhileDisarmed(t *testing.T) {
+	var e Engine // armed defaults false
+	c := rateCh(input.SrcLeftStickX)
+	got, _ := drive(&e, c, stateWithAxis(input.SrcLeftStickX, 1), t0, 5)
+	if got != crsf.TicksMid {
+		t.Errorf("disarmed = %d, want center %d (no integration while disarmed)", got, crsf.TicksMid)
+	}
+}
+
+func TestRateRecenter(t *testing.T) {
+	var e Engine
+	e.armed = true
+	c := rateCh(input.SrcLeftStickX)
+	c.RecenterSource = input.SrcA
+
+	moved, now := drive(&e, c, stateWithAxis(input.SrcLeftStickX, 1), t0, 5)
+	if moved == crsf.TicksMid {
+		t.Fatalf("expected off-center position before recenter, got center")
+	}
+	// Press recenter while the stick is still deflected -> snaps to center.
+	recenter := stateWithAxis(input.SrcLeftStickX, 1)
+	recenter.Buttons[input.SrcA] = true
+	if got := e.applyOne(0, c, recenter, now.Add(100*time.Millisecond)); got != crsf.TicksMid {
+		t.Errorf("recenter = %d, want center %d", got, crsf.TicksMid)
+	}
+}
+
+func TestRateNoLurchAfterDisarmedGap(t *testing.T) {
+	// A long disarmed gap must not cause a giant jump on re-arm: position only
+	// advances from the moment integration resumes.
+	var e Engine
+	c := rateCh(input.SrcLeftStickX)
+	full := stateWithAxis(input.SrcLeftStickX, 1)
+
+	e.applyOne(0, c, full, t0) // seed, disarmed
+	// 10 seconds pass while disarmed; lastAt tracks even though position is frozen.
+	e.applyOne(0, c, full, t0.Add(10*time.Second))
+	if got := e.applyOne(0, c, full, t0.Add(10*time.Second)); got != crsf.TicksMid {
+		t.Fatalf("still disarmed = %d, want center %d", got, crsf.TicksMid)
+	}
+	// Re-arm and step a single capped dt: position must move only a little, not lurch.
+	e.armed = true
+	got := e.applyOne(0, c, full, t0.Add(10*time.Second+100*time.Millisecond))
+	if got == crsf.TicksMid {
+		t.Errorf("expected slight movement after re-arm, got center")
+	}
+	if got >= crsf.TicksMax {
+		t.Errorf("lurched to %d after re-arm; expected a small step from center", got)
+	}
+}
+
 func TestSwitch2Momentary(t *testing.T) {
 	var e Engine
 	c := DefaultChannel("t")
@@ -241,7 +353,7 @@ func TestSwitch3(t *testing.T) {
 	var e Engine
 	c := DefaultChannel("t")
 	c.Type = TypeSwitch3
-	c.Source = input.SrcDUp   // up -> High
+	c.Source = input.SrcDUp    // up -> High
 	c.Source2 = input.SrcDDown // down -> Low
 
 	if got := e.applyOne(0, c, input.NewState(), t0); got != uint16(c.Mid) {

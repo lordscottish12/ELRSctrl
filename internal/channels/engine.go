@@ -9,18 +9,27 @@ import (
 )
 
 // Engine evaluates a mapping each frame. It is stateful because toggle switches
-// remember their position and pulse mode flips on a wall-clock timer.
+// remember their position, pulse mode flips on a wall-clock timer, and rate-mode
+// channels integrate their position over time.
 type Engine struct {
 	toggle      [crsf.NumChannels]bool
 	prevBtn     [crsf.NumChannels]bool
 	pulseOn     [crsf.NumChannels]bool      // current half of the pulse cycle while held
 	pulseFlipAt [crsf.NumChannels]time.Time // wall-clock instant to flip pulseOn next
+
+	armed      bool                        // set each Apply; rate channels only integrate while armed
+	ratePos    [crsf.NumChannels]float64   // rate mode: accumulated position, normalized -1..1 (Min..Max)
+	rateInit   [crsf.NumChannels]bool      // rate mode: ratePos has been seeded
+	rateLastAt [crsf.NumChannels]time.Time // rate mode: previous Apply instant, for dt
 }
 
-// Apply evaluates all channels against the current input snapshot. now drives
-// the pulse-mode timer; pass time.Now() in production. Channels beyond
-// len(chans) are centered.
-func (e *Engine) Apply(chans []Channel, in input.State, now time.Time) [crsf.NumChannels]uint16 {
+// Apply evaluates all channels against the current input snapshot. now drives the
+// pulse-mode timer and rate-mode integration; pass time.Now() in production.
+// armed gates rate-mode integration (it holds position while disarmed so stick
+// motion on the setup screens can't drift a turret). Channels beyond len(chans)
+// are centered.
+func (e *Engine) Apply(chans []Channel, in input.State, armed bool, now time.Time) [crsf.NumChannels]uint16 {
+	e.armed = armed
 	var out [crsf.NumChannels]uint16
 	for i := 0; i < crsf.NumChannels; i++ {
 		if i < len(chans) {
@@ -77,11 +86,76 @@ func (e *Engine) applyOne(i int, c Channel, in input.State, now time.Time) uint1
 		}
 
 	case TypeAnalog:
+		if c.Mode == ModeRate {
+			return e.rateValue(i, c, in, now)
+		}
 		return analogValue(c, in)
 
 	default: // TypeNone
 		return crsf.TicksMid
 	}
+}
+
+// rateValue implements integrating ("rate of change") control: the shaped source
+// sets how fast the channel moves, not where it sits, so releasing the stick to
+// center holds the current position. Position accumulates in normalized space
+// [-1,1] (mapped to [Min,Max]) and is clamped to the endpoints. It advances only
+// while armed; a RecenterSource button, if bound, snaps to center while held,
+// regardless of arm state.
+func (e *Engine) rateValue(i int, c Channel, in input.State, now time.Time) uint16 {
+	if !e.rateInit[i] {
+		e.ratePos[i] = 0 // start centered
+		e.rateLastAt[i] = now
+		e.rateInit[i] = true
+	}
+	dt := now.Sub(e.rateLastAt[i]).Seconds()
+	e.rateLastAt[i] = now
+	if dt < 0 {
+		dt = 0
+	}
+	if dt > 0.1 { // cap dt after a UI stall so position can't lurch
+		dt = 0.1
+	}
+
+	switch {
+	case c.RecenterSource != input.SrcNone && in.Pressed(c.RecenterSource):
+		e.ratePos[i] = 0
+	case e.armed:
+		sweep := c.SweepSecs
+		if sweep <= 0 {
+			sweep = DefaultSweepSecs
+		}
+		// A full Min->Max sweep spans 2 normalized units; at full deflection it
+		// should take `sweep` seconds, so the per-second rate is 2/sweep.
+		e.ratePos[i] = clampBipolar(e.ratePos[i] + rateCommand(c, in)*(2.0/sweep)*dt)
+	}
+
+	mid := float64(c.Min+c.Max) / 2
+	half := float64(c.Max-c.Min) / 2
+	v := mid + e.ratePos[i]*half + float64(c.Trim)
+	return crsf.ClampTicks(int(math.Round(v)))
+}
+
+// rateCommand shapes an analog source into a signed rate command for ModeRate.
+// Bipolar sources give -1..1 (drive either way); a unipolar trigger gives 0..1
+// (one direction only). Reverse/Deadzone/Expo apply; Scale does not (SweepSecs is
+// the speed control).
+func rateCommand(c Channel, in input.State) float64 {
+	raw := in.Analog(c.Source)
+	if c.Source.Bipolar() {
+		x := raw
+		if c.Reverse {
+			x = -x
+		}
+		x = deadzoneBipolar(x, c.Deadzone)
+		return clampBipolar(expo(x, c.Expo))
+	}
+	x := clamp01(raw)
+	if c.Reverse {
+		x = 1 - x
+	}
+	x = deadzoneUnipolar(x, c.Deadzone)
+	return clamp01(expo(x, c.Expo))
 }
 
 func analogValue(c Channel, in input.State) uint16 {

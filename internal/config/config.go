@@ -178,6 +178,9 @@ func (c *Config) normalize() {
 		if ch.Source2 == "" {
 			ch.Source2 = input.SrcNone
 		}
+		if ch.RecenterSource == "" {
+			ch.RecenterSource = input.SrcNone
+		}
 		// Migrate the old "momentary: true" bool to PressMode. One-way: the bool
 		// is then cleared so saving rewrites it in the new form. Empty PressMode
 		// is fine — the engine treats it as toggle, which keeps the YAML clean.

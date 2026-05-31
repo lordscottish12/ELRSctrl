@@ -17,6 +17,7 @@ import (
 	"elrsctrl/internal/sender"
 	"elrsctrl/internal/serial"
 	"elrsctrl/internal/state"
+	"elrsctrl/internal/version"
 )
 
 const (
@@ -32,6 +33,7 @@ const (
 	bindNone bindKind = iota
 	bindChannelSource
 	bindChannelSource2
+	bindChannelRecenter
 	bindArm
 	bindKill
 )
@@ -131,7 +133,7 @@ func (g *Game) Update() error {
 	}
 	g.prevRB, g.prevLB = rb, lb
 
-	live := g.engine.Apply(g.cfg.Channels, g.in, time.Now())
+	live := g.engine.Apply(g.cfg.Channels, g.in, g.armed, time.Now())
 	fs := channels.FailsafeValues(g.cfg.Channels)
 	g.store.SetSnapshot(state.Snapshot{
 		Live:    live,
@@ -245,6 +247,8 @@ func (g *Game) assignBind(src input.Source) {
 		g.autoType(g.selCh, src)
 	case bindChannelSource2:
 		g.cfg.Channels[g.selCh].Source2 = src
+	case bindChannelRecenter:
+		g.cfg.Channels[g.selCh].RecenterSource = src
 	case bindArm:
 		g.cfg.Safety.ArmSource = src
 	case bindKill:
@@ -344,6 +348,11 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		fillRect(screen, 0, screenH-30, screenW, 30, colPanel2)
 		drawText(screen, g.status, 12, screenH-26, sizeSmall, colWarn)
 	}
+
+	// Build identifier in the bottom-right corner, so a running build can be
+	// matched back to its commit at a glance. Drawn last (but under the cursor)
+	// so it sits on top of every screen.
+	drawTextR(screen, version.String(), screenW-12, screenH-24, sizeSmall, colTextDim)
 
 	// Virtual cursor on top of everything, so the controller can drive the UI.
 	if g.padCursorActive() {

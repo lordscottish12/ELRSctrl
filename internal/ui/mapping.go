@@ -61,18 +61,24 @@ func (g *Game) drawChannelEditor(screen *ebiten.Image, p pointer) {
 
 	switch c.Type {
 	case channels.TypeAnalog:
+		rate := c.Mode == channels.ModeRate
+		if d := f.stepper("Mode", analogModeLabel(c.Mode)); d != 0 {
+			c.Mode = cycleAnalogMode(c.Mode, d)
+		}
 		if f.toggle("Reverse", c.Reverse) {
 			c.Reverse = !c.Reverse
 		}
 		if d := f.stepper("Expo", fmt.Sprintf("%.1f", c.Expo)); d != 0 {
 			c.Expo = clampF(c.Expo+0.1*float64(d), -1, 1)
 		}
-		scale := c.Scale
-		if scale <= 0 {
-			scale = 1
-		}
-		if d := f.stepper("Scale (rate)", fmt.Sprintf("%.2f", scale)); d != 0 {
-			c.Scale = clampF(scale+0.05*float64(d), 0.1, 2)
+		if !rate { // Scale is a position-mode "rate"; in rate mode SweepSecs is the speed control.
+			scale := c.Scale
+			if scale <= 0 {
+				scale = 1
+			}
+			if d := f.stepper("Scale (rate)", fmt.Sprintf("%.2f", scale)); d != 0 {
+				c.Scale = clampF(scale+0.05*float64(d), 0.1, 2)
+			}
 		}
 		if d := f.stepper("Deadzone", fmt.Sprintf("%.2f", c.Deadzone)); d != 0 {
 			c.Deadzone = clampF(c.Deadzone+0.05*float64(d), 0, 0.9)
@@ -85,6 +91,23 @@ func (g *Game) drawChannelEditor(screen *ebiten.Image, p pointer) {
 		}
 		if d := f.stepper("Max (ticks)", strconv.Itoa(c.Max)); d != 0 {
 			c.Max = clampI(c.Max+10*d, 0, int(crsf.TicksCeil))
+		}
+		if rate {
+			sweep := c.SweepSecs
+			if sweep <= 0 {
+				sweep = channels.DefaultSweepSecs
+			}
+			if d := f.stepper("Sweep time (s)", fmt.Sprintf("%.1f", sweep)); d != 0 {
+				c.SweepSecs = clampF(sweep+0.5*float64(d), 0.5, 20)
+			}
+			if d, bind := f.sourceRow("Recenter", c.RecenterSource.Label()); d != 0 || bind {
+				if d != 0 {
+					c.RecenterSource = cycleSource(c.RecenterSource, d)
+				}
+				if bind {
+					g.bind = bindChannelRecenter
+				}
+			}
 		}
 
 	case channels.TypeSwitch2:
@@ -247,6 +270,33 @@ func pressModeLabel(m channels.PressMode) string {
 	default:
 		return "Toggle"
 	}
+}
+
+// Empty AnalogMode is the "position" default — match it under the position slot
+// so the stepper shows "Position" rather than nothing on older configs.
+var analogModeOrder = []channels.AnalogMode{
+	channels.ModePosition, channels.ModeRate,
+}
+
+func cycleAnalogMode(m channels.AnalogMode, d int) channels.AnalogMode {
+	if m == "" {
+		m = channels.ModePosition
+	}
+	i := 0
+	for k, v := range analogModeOrder {
+		if v == m {
+			i = k
+			break
+		}
+	}
+	return analogModeOrder[wrap(i+d, len(analogModeOrder))]
+}
+
+func analogModeLabel(m channels.AnalogMode) string {
+	if m == channels.ModeRate {
+		return "Rate"
+	}
+	return "Position"
 }
 
 func cycleSource(s input.Source, d int) input.Source {

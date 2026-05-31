@@ -72,9 +72,21 @@ if [ "$missing" -ne 0 ]; then
 fi
 
 # --- build -------------------------------------------------------------------
+# Stamp a build identifier from git: bN-<shorthash>[-dirty] (N = commit count),
+# baked in via -ldflags so the binary's version string (shown bottom-right in the
+# UI and at startup) matches the commit it came from. The runtime has its own VCS
+# fallback (internal/version), so this only enriches the string with the count.
+HASH="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+COUNT="$(git rev-list --count HEAD 2>/dev/null || echo 0)"
+DIRTY=""
+git diff --quiet 2>/dev/null || DIRTY="-dirty"
+VERSION="b${COUNT}-${HASH}${DIRTY}"
+
 mkdir -p dist
-echo "Building dist/elrsctrl for Steam Deck (native linux/amd64)..."
-CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -trimpath -o dist/elrsctrl ./cmd/elrsctrl
+echo "Building dist/elrsctrl $VERSION for Steam Deck (native linux/amd64)..."
+CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -trimpath \
+  -ldflags "-X elrsctrl/internal/version.Version=$VERSION" \
+  -o dist/elrsctrl ./cmd/elrsctrl
 
 echo "Done -> dist/elrsctrl"
 

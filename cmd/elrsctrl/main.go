@@ -25,10 +25,12 @@ import (
 	"elrsctrl/internal/sender"
 	"elrsctrl/internal/state"
 	"elrsctrl/internal/ui"
+	"elrsctrl/internal/version"
 )
 
 func main() {
 	log.SetFlags(log.Ltime)
+	log.Printf("elrsctrl %s", version.String())
 
 	var (
 		cfgPath    = flag.String("config", "config.yaml", "path to the YAML profile (created on first Save)")

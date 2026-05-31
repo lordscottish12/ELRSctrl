@@ -79,14 +79,20 @@ isn't a trap: the cursor is hidden while armed, so this chord is the guaranteed
 escape. Gamepad disconnect auto-disarms; exit sends a short failsafe burst. When
 touching throttle logic, preserve "neutral/off is the failsafe."
 
-**Mapping engine (`internal/channels`).** `Engine.Apply(chans, inputState)` →
-`[16]uint16` CRSF ticks. Channel types: `analog` (reverse/expo/deadzone/trim/
-endpoints), `switch2` (button → low/high; `PressMode` = toggle / momentary /
-pulse — pulse runs a 50/50 square wave at `PulseHz` while held, used for repeated
-trigger pulls e.g. a nerf-gun servo. Engine is stateful for rising-edge toggling
-and the pulse timer), `switch3` (two buttons → low/mid/high), `fixed`, `none`. This
-package + `crsf` hold the only unit tests; keep them green when changing mapping
-math.
+**Mapping engine (`internal/channels`).** `Engine.Apply(chans, inputState, armed,
+now)` → `[16]uint16` CRSF ticks. Channel types: `analog` (reverse/expo/deadzone/
+trim/endpoints; `Mode` = `position` (default, source → absolute value) or `rate` —
+integrating/velocity control where the source sets how fast the channel moves and
+centering the stick *holds* position, for e.g. a turret. Rate mode integrates only
+while `armed` (so stick-as-cursor motion on the setup screens can't drift it),
+clamps to the endpoints, uses `SweepSecs` (time for a full Min→Max sweep at full
+deflection) as the speed control instead of `Scale`, and an optional
+`RecenterSource` button snaps back to center while held), `switch2` (button →
+low/high; `PressMode` = toggle / momentary / pulse — pulse runs a 50/50 square wave
+at `PulseHz` while held, used for repeated trigger pulls e.g. a nerf-gun servo.
+Engine is stateful for rising-edge toggling, the pulse timer, and rate-mode
+position), `switch3` (two buttons → low/mid/high), `fixed`, `none`. This package +
+`crsf` hold the only unit tests; keep them green when changing mapping math.
 
 **CRSF (`internal/crsf`).** RC_CHANNELS_PACKED: `[addr=0xEE][len=0x18][type=0x16]
 [16ch × 11-bit, LSB-first][CRC8]`, CRC8 = DVB-S2 (poly 0xD5) over `[type+payload]`.
