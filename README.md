@@ -243,3 +243,17 @@ unit tests are in [`internal/crsf`](internal/crsf).
   Settings use the **Gamepad** picker to select the right device.
 - **Car twitches when you tab away:** expected — the app sends failsafe when the
   snapshot goes stale or it loses input. Re-arm to resume.
+
+---
+
+## 8. 3D-printable parts
+
+Optional STL files for kitting out the vehicle live in [`3dprinting/`](3dprinting):
+
+- [`CameraAndVtxBox.stl`](3dprinting/CameraAndVtxBox.stl) — a box that holds an
+  analog FPV camera and a VTX (video transmitter).
+- [`Chassis_Connector.stl`](3dprinting/Chassis_Connector.stl) — a connector that
+  mounts a custom vehicle cover/body to the **Traxxas Maxx** chassis.
+- [`Waterpistole_holder_02.stl`](3dprinting/Waterpistole_holder_02.stl) — a mount
+  for the **X-Shot** water pistol, with a spot for a servo (drive it from a
+  `switch2` channel in **pulse** mode for repeated trigger pulls).
