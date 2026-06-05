@@ -210,6 +210,15 @@ func (f *form) toggle(label string, on bool) bool {
 	return toggleButton(f.screen, f.p, f.x+f.w-tw, y, tw, f.ctrlH(), lbl, on)
 }
 
+// textRow draws a label and a wide editable text field, returning a click on the
+// field (used to toggle edit focus). editing drives the field's caret/border.
+func (f *form) textRow(label, value string, editing bool) (clicked bool) {
+	y := f.advance()
+	drawText(f.screen, label, float64(f.x), f.labelY(y), sizeLabel, colTextDim)
+	const tw = 320
+	return textField(f.screen, f.p, f.x+f.w-tw, y, tw, f.ctrlH(), value, editing)
+}
+
 func (f *form) sourceRow(label, value string) (delta int, bindClicked bool) {
 	y := f.advance()
 	drawText(f.screen, label, float64(f.x), f.labelY(y), sizeLabel, colTextDim)

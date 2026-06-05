@@ -19,6 +19,26 @@ type Snapshot struct {
 	UpdatedAt time.Time                // when the UI last refreshed this
 }
 
+// Telemetry is the latest ELRS link/battery data parsed from inbound CRSF frames
+// (written by the sender's reader goroutine, read by the UI). The *At timestamps
+// let the UI judge freshness / connection health.
+type Telemetry struct {
+	LinkValid  bool
+	UplinkLQ   uint8 // link quality 0-100 %
+	UplinkRSSI int   // dBm (negative)
+	UplinkSNR  int8
+	RFMode     uint8
+	TXPowerMW  int
+
+	BatteryValid bool
+	Voltage      float64 // V
+	Current      float64 // A
+
+	LinkAt  time.Time // last LINK_STATISTICS frame
+	BattAt  time.Time // last BATTERY_SENSOR frame
+	FrameAt time.Time // last telemetry frame of any type
+}
+
 // Store is the shared, concurrency-safe state between UI and sender.
 type Store struct {
 	mu   sync.RWMutex
@@ -28,6 +48,10 @@ type Store struct {
 	portName      atomic.Value // string
 	lastErr       atomic.Value // string
 	txCount       atomic.Uint64
+
+	telMu     sync.Mutex
+	tel       Telemetry
+	telFrames atomic.Uint64
 }
 
 // New returns a Store seeded with a centered, disarmed snapshot.
@@ -69,6 +93,28 @@ func (s *Store) SetPortStatus(connected bool, name, errMsg string) {
 }
 
 func (s *Store) IncTx() { s.txCount.Add(1) }
+
+// --- Inbound telemetry (written by the sender's reader, read by the UI) ---
+
+// SetTelemetry stores the latest telemetry. The reader is the sole writer, so it
+// can read-modify-write via Telemetry()/SetTelemetry without losing updates.
+func (s *Store) SetTelemetry(t Telemetry) {
+	s.telMu.Lock()
+	s.tel = t
+	s.telMu.Unlock()
+}
+
+// Telemetry returns a copy of the latest telemetry.
+func (s *Store) Telemetry() Telemetry {
+	s.telMu.Lock()
+	defer s.telMu.Unlock()
+	return s.tel
+}
+
+// IncTelemetryFrames counts every parsed telemetry frame, so the UI can show
+// whether anything is arriving at all (the key "is telemetry working?" diagnostic).
+func (s *Store) IncTelemetryFrames()        { s.telFrames.Add(1) }
+func (s *Store) TelemetryFrames() uint64    { return s.telFrames.Load() }
 
 func (s *Store) PortConnected() bool { return s.portConnected.Load() }
 func (s *Store) PortName() string    { v, _ := s.portName.Load().(string); return v }

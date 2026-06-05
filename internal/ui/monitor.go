@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
 
@@ -23,15 +24,8 @@ func monRowH() float32 {
 	return float32(screenH-monBarsTop-8) / float32(crsf.NumChannels)
 }
 
-// armRects returns the ARM/DISARM and KILL button rectangles.
-func armRects() (ax, ay, aw, ah, kx float32) {
-	aw, ah = 160, 64
-	ay = tabH + 22
-	ax = screenW - 360
-	kx = screenW - 180
-	return
-}
-
+// drawMonitor is the read-only channel overview: link/gamepad status plus the 16
+// channel bars. Arm/Kill live on the Run screen, not here.
 func (g *Game) drawMonitor(screen *ebiten.Image, p pointer) {
 	snap := g.store.Snapshot()
 
@@ -42,9 +36,9 @@ func (g *Game) drawMonitor(screen *ebiten.Image, p pointer) {
 		effective = snap.Failsafe
 	}
 
-	// Status panel.
-	fillRect(screen, 8, monStatusY, screenW-376, monStatusH, colPanel)
-	strokeRect(screen, 8, monStatusY, screenW-376, monStatusH, 1, colGrid)
+	// Status panel (full width now that Arm/Kill moved to the Run screen).
+	fillRect(screen, 8, monStatusY, screenW-16, monStatusH, colPanel)
+	strokeRect(screen, 8, monStatusY, screenW-16, monStatusH, 1, colGrid)
 
 	portTxt := "Port: (none)"
 	portCol := colBad
@@ -65,21 +59,20 @@ func (g *Game) drawMonitor(screen *ebiten.Image, p pointer) {
 	}
 	drawText(screen, padTxt, 360, monStatusY+10, sizeLabel, padCol)
 	if e := g.store.LastError(); e != "" && !g.store.PortConnected() {
-		drawText(screen, trim(e, 70), 360, monStatusY+38, sizeSmall, colWarn)
+		drawText(screen, trim(e, 60), 360, monStatusY+38, sizeSmall, colWarn)
 	}
 
-	// ARM / KILL.
-	ax, ay, aw, ah, kx := armRects()
-	armLabel, armCol := "DISARMED", colBad
-	if g.armed {
-		armLabel, armCol = "ARMED", colGood
+	// Telemetry diagnostic (third column): proves inbound CRSF is arriving and, when
+	// link stats are fresh, shows the live link quality.
+	tel := g.store.Telemetry()
+	telCol := colTextDim
+	if tel.LinkValid && time.Since(tel.LinkAt) < 2*time.Second {
+		telCol = colGood
 	}
-	if button(screen, p, ax, ay, aw, ah, armLabel, armCol) {
-		g.armed = !g.armed
-	}
-	if button(screen, p, kx, ay, aw, ah, "KILL", colBad) {
-		g.armed = false
-		g.setStatus("KILL — disarmed")
+	drawText(screen, fmt.Sprintf("Telemetry rx: %d", g.store.TelemetryFrames()), 760, monStatusY+10, sizeLabel, telCol)
+	if tel.LinkValid && time.Since(tel.LinkAt) < 2*time.Second {
+		drawText(screen, fmt.Sprintf("LQ %d%%  %ddBm  %dmW", tel.UplinkLQ, tel.UplinkRSSI, tel.TXPowerMW),
+			760, monStatusY+38, sizeSmall, colTextDim)
 	}
 
 	if !live {

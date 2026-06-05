@@ -127,6 +127,10 @@ func (s *Sender) ensurePort() {
 	}
 	s.port = p
 	s.store.SetPortStatus(true, name, "")
+	// Side-channel telemetry reader, bound to this port instance. It ends when the
+	// port is closed/reopened (Read errors), so there's exactly one per open and it
+	// never touches the transmit path below.
+	go s.readTelemetry(p)
 }
 
 func (s *Sender) writeFrame(f []byte) {
@@ -145,6 +149,61 @@ func (s *Sender) closePort() {
 	if s.port != nil {
 		_ = s.port.Close()
 		s.port = nil
+	}
+}
+
+// readTelemetry drains inbound CRSF frames from p (the ELRS module relays link
+// stats / battery back over the handset UART) and folds them into the Store. It is
+// a side channel: full-duplex serial means it runs fully independently of the
+// transmit loop. It exits when p is closed/reopened (Read returns an error).
+func (s *Sender) readTelemetry(p *serial.Port) {
+	_ = p.SetReadTimeout(200 * time.Millisecond) // wake periodically; (0,nil) on idle
+	var parser crsf.Parser
+	buf := make([]byte, 256)
+	for {
+		n, err := p.Read(buf)
+		if n > 0 {
+			parser.Push(buf[:n], s.applyTelemetry)
+		}
+		if err != nil {
+			return // port closed/reopened
+		}
+	}
+}
+
+// applyTelemetry folds one parsed frame into the Store's Telemetry. The reader is
+// the sole writer, so the read-modify-write is race-free.
+func (s *Sender) applyTelemetry(typ byte, payload []byte) {
+	s.store.IncTelemetryFrames()
+	now := time.Now()
+	switch typ {
+	case crsf.FrameTypeLinkStats:
+		ls, ok := crsf.DecodeLinkStats(payload)
+		if !ok {
+			return
+		}
+		t := s.store.Telemetry()
+		t.LinkValid = true
+		t.UplinkLQ = ls.UplinkLQ
+		t.UplinkRSSI = -int(ls.UplinkRSSI1)
+		t.UplinkSNR = ls.UplinkSNR
+		t.RFMode = ls.RFMode
+		t.TXPowerMW = crsf.TXPowerMW(ls.TXPowerIdx)
+		t.LinkAt, t.FrameAt = now, now
+		s.store.SetTelemetry(t)
+	case crsf.FrameTypeBattery:
+		b, ok := crsf.DecodeBattery(payload)
+		if !ok {
+			return
+		}
+		t := s.store.Telemetry()
+		t.BatteryValid = true
+		t.Voltage = b.Voltage
+		t.Current = b.Current
+		t.BattAt, t.FrameAt = now, now
+		s.store.SetTelemetry(t)
+	default:
+		// counted above (TelemetryFrames) but not surfaced — still proves the link.
 	}
 }
 

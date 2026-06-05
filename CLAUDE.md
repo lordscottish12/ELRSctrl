@@ -130,22 +130,51 @@ they flow through automatically.
   Mode + Steam Input intercepts non-Steam games). The Settings screen has a gamepad
   picker for when Steam's virtual pad also appears.
 
-## Roadmap: analog video feed (planned, not yet implemented)
+## Analog video feed (`internal/video`)
 
-Goal: with an analog FPV video receiver + USB capture dongle connected to the
-Deck's USB-C, show the live feed in the app (e.g., as the Monitor background with
-channel bars / arm state as a HUD overlay).
+The Skydroid 5.8 GHz OTG receiver is a **UVC** device → on Linux a **V4L2** node
+(`/dev/video*`). `internal/video` captures it and feeds the **Run** screen. The capture goroutine decodes each frame (MJPEG via
+`image/jpeg`, or YUYV→RGBA) and hands the **latest** frame to the UI through a
+single-slot `Buffer` that mirrors the `state.Store` pattern (drop frames, never
+block). The UI uploads it to an `*ebiten.Image` (`WritePixels`) once per UI frame and
+letterboxes it. All capture/decode lives on the UI/Draw path — **the CRSF sender
+goroutine is never touched.** `config.Video` ({enabled, device}) drives a device
+picker + on/off toggle on the Settings screen; `Game.applyVideo` (much like
+`applyPort`) owns the capture lifecycle.
 
-Suggested approach when implementing:
-- The capture dongle presents as a **UVC** device → on Linux a **V4L2** node
-  (`/dev/video*`). Capture with a V4L2 library (e.g. `github.com/vladimirvivien/go4vl`),
-  Linux-only behind a build tag (`//go:build linux`), with a no-op stub elsewhere so
-  Windows dev still builds.
-- New `internal/video` package exposing a `Capture` interface and a goroutine that
-  decodes frames (MJPEG via `image/jpeg`, or YUYV→RGBA) and hands the **latest**
-  frame to the UI through a mutex-guarded buffer — mirror the `state.Store` pattern
-  (drop frames, never block).
-- In the UI, upload the frame to an `*ebiten.Image` (`WritePixels`) once per UI
-  frame and draw it before the channel bars. Keep all V4L2/decoding off the transmit
-  path — **the CRSF sender goroutine must remain untouched and unblocked.**
-- Add device selection (`/dev/videoN`) and an on/off toggle to the Settings screen.
+A Betaflight-style **OSD** (`internal/ui/run.go` `drawOSD`) overlays the feed:
+center crosshair, arm-state text, vehicle name, and a debug readout
+(resolution/format/fps via `Capture.Info()` + UI-measured fps). Each element is an
+independently toggleable `config.OSD` field, configured in the Settings tab's right
+column. The vehicle name is the UI's one text field — `Game.editName` focuses it,
+`updateNameEdit` captures keystrokes (`ebiten.AppendInputChars` + Backspace,
+Enter/Esc to commit); on the bare Deck use a keyboard / the KDE on-screen keyboard,
+or set `osd.vehicle_name` in the YAML. OSD text uses an outline pass
+(`drawTextOutlined*`) for legibility over video.
+
+V4L2 is hand-rolled directly on `golang.org/x/sys/unix` (a small MMAP-streaming
+loop: QUERYCAP → S_FMT → REQBUFS → mmap → QBUF/DQBUF → STREAMON), Linux-only behind
+`//go:build linux`, with a no-op stub (`capture_stub.go`) so Windows dev still
+builds. **Don't replace it with `github.com/vladimirvivien/go4vl`:** go4vl is cgo
+*and* references V4L2 constants newer than the Deck build toolchain's kernel uABI
+headers (Ubuntu 22.04 / linux-libc-dev 5.15, kept old for glibc ≤ 2.37), so it won't
+compile there — and being cgo, it can't be cross-checked from the Windows box. The
+hand-rolled path is pure Go: `CGO_ENABLED=0 GOOS=linux go build ./internal/video/`
+type-checks it from Windows, and `internal/video`'s tests assert the V4L2 struct
+sizes (104/208/20/88) so an ABI layout slip fails a test instead of the Deck.
+
+## Inbound telemetry (`internal/crsf` parser + `internal/sender` reader)
+
+ELRS is bidirectional: the module relays CRSF telemetry **back** over the same
+handset UART. The sender spawns one **reader goroutine per port open**
+(`readTelemetry`, bound to that `*serial.Port`; it ends when the port is
+closed/reopened and Read errors). It's a pure side channel on the full-duplex
+port — **the transmit loop (`tick`/`writeFrame`) is never touched or blocked.**
+`crsf.Parser` resyncs on the CRC (`Push`), and `LINK_STATISTICS` (link quality /
+RSSI / TX power — the "robust connection" signal) + `BATTERY_SENSOR` decode into
+`state.Telemetry` (the reader is the sole writer, so it read-modify-writes). The
+Run-screen OSD shows a link/`NO LINK`/`NO TELEMETRY` indicator + battery (toggle
+`osd.telemetry`); the Monitor `Telemetry rx:` counter (`store.TelemetryFrames`)
+proves frames are arriving at all. Telemetry only flows with a **bound, powered RX**
+and the module relaying CRSF telemetry over the handset UART — if `rx` stays 0,
+that path isn't sending, independent of the app.

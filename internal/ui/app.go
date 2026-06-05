@@ -1,5 +1,5 @@
 // Package ui is the Ebiten front-end: an immediate-mode, touch-and-mouse UI with
-// three screens (Monitor, Mapping, Settings). It owns the input reader and the
+// four screens (Run, Monitor, Mapping, Settings). It owns the input reader and the
 // channel engine, polls the gamepad each frame, and publishes a control snapshot
 // to the shared Store that the sender goroutine transmits.
 package ui
@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
+	"github.com/hajimehoshi/ebiten/v2/inpututil"
 
 	"elrsctrl/internal/channels"
 	"elrsctrl/internal/config"
@@ -18,10 +19,12 @@ import (
 	"elrsctrl/internal/serial"
 	"elrsctrl/internal/state"
 	"elrsctrl/internal/version"
+	"elrsctrl/internal/video"
 )
 
 const (
-	tabMonitor = iota
+	tabRun = iota
+	tabMonitor
 	tabMapping
 	tabSettings
 	tabCount
@@ -55,7 +58,8 @@ type Game struct {
 	tab        int
 	selCh      int
 	bind       bindKind
-	gamepadSel int // -1 = auto
+	editName   bool // Settings: OSD vehicle-name text field has keyboard focus
+	gamepadSel int  // -1 = auto
 
 	prevPointerPressed bool // for our own mouse/touch click-edge detection (see readPointer)
 	prevRB, prevLB     bool // edge tracking for gamepad tab navigation
@@ -71,6 +75,19 @@ type Game struct {
 	gamepads     []input.Device
 	status       string
 	statusFrames int
+
+	// Analog FPV capture for the Run screen. videoCap is opened/closed by
+	// applyVideo (off the transmit path); videoTex caches the last frame uploaded
+	// to the GPU, re-uploaded only when videoSeq advances.
+	videoCap *video.Capture
+	videoTex *ebiten.Image
+	videoSeq uint64
+
+	// Capture fps, measured in the UI from the frame Buffer's seq for the OSD
+	// video-info readout (recomputed ~once/sec in drawRun).
+	vidFPS    float64
+	vidFPSSeq uint64
+	vidFPSAt  time.Time
 }
 
 // New builds the Game. cfgPath may be "" (Save is then disabled).
@@ -87,7 +104,29 @@ func New(cfg *config.Config, cfgPath string, store *state.Store, snd *sender.Sen
 		cursorY:    screenH / 2,
 	}
 	g.refreshPorts()
+	g.applyVideo()
 	return g
+}
+
+// applyVideo reconciles the capture device with cfg.Video: close any open capture,
+// then open the configured device if video is enabled. Best-effort — a failure
+// just leaves videoCap as the failed/stub handle (its Err shows on the Run
+// screen) and never blocks the UI or the transmit loop.
+func (g *Game) applyVideo() {
+	if g.videoCap != nil {
+		g.videoCap.Close()
+		g.videoCap = nil
+	}
+	g.videoTex, g.videoSeq = nil, 0
+	if !g.cfg.Video.Enabled || g.cfg.Video.Device == "" {
+		return
+	}
+	cap, err := video.Open(g.cfg.Video.Device)
+	if err != nil {
+		g.setStatus("video: %v", err)
+		return
+	}
+	g.videoCap = cap
 }
 
 func (g *Game) setStatus(format string, a ...any) {
@@ -115,6 +154,7 @@ func (g *Game) Update() error {
 	g.in = g.reader.Poll()
 
 	g.updateBind()
+	g.updateNameEdit()
 	g.applyArmKill()
 	g.updateCursor()
 
@@ -123,7 +163,7 @@ func (g *Game) Update() error {
 	// hijacked. Edge-tracked manually since input.State is level-triggered.
 	rb := g.in.Connected && g.in.Pressed(input.SrcRB)
 	lb := g.in.Connected && g.in.Pressed(input.SrcLB)
-	if g.bind == bindNone && !g.armed {
+	if g.bind == bindNone && !g.armed && !g.editName {
 		switch {
 		case rb && !g.prevRB:
 			g.tab = wrap(g.tab+1, tabCount)
@@ -171,6 +211,35 @@ func (g *Game) updateBind() {
 		g.assignBind(src)
 		g.bind = bindNone
 	}
+}
+
+// nameMaxLen caps the OSD vehicle name so it can't overflow the field or overlay.
+const nameMaxLen = 24
+
+// updateNameEdit captures keyboard input into the OSD vehicle name while its
+// Settings field has focus (g.editName). Runs in Update (not Draw) since key edges
+// commit on the Update tick; the field is drawn and focus toggled in Draw. Enter or
+// Escape commits; Backspace deletes; printable runes append up to nameMaxLen.
+func (g *Game) updateNameEdit() {
+	if !g.editName {
+		return
+	}
+	if inpututil.IsKeyJustPressed(ebiten.KeyEnter) ||
+		inpututil.IsKeyJustPressed(ebiten.KeyNumpadEnter) ||
+		inpututil.IsKeyJustPressed(ebiten.KeyEscape) {
+		g.editName = false
+		return
+	}
+	name := []rune(g.cfg.OSD.VehicleName)
+	if inpututil.IsKeyJustPressed(ebiten.KeyBackspace) && len(name) > 0 {
+		name = name[:len(name)-1]
+	}
+	for _, r := range ebiten.AppendInputChars(nil) {
+		if r >= 0x20 && r != 0x7f && len(name) < nameMaxLen {
+			name = append(name, r)
+		}
+	}
+	g.cfg.OSD.VehicleName = string(name)
 }
 
 // padCursorActive reports whether the gamepad-driven virtual cursor is live: only
@@ -325,6 +394,8 @@ func (g *Game) Draw(screen *ebiten.Image) {
 
 	g.drawTabs(screen, ip)
 	switch g.tab {
+	case tabRun:
+		g.drawRun(screen, ip)
 	case tabMonitor:
 		g.drawMonitor(screen, ip)
 	case tabMapping:
@@ -361,8 +432,8 @@ func (g *Game) Draw(screen *ebiten.Image) {
 }
 
 func (g *Game) drawTabs(screen *ebiten.Image, p pointer) {
-	const tw = screenW / 3
-	names := []string{"Monitor", "Mapping", "Settings"}
+	names := []string{"Run", "Monitor", "Mapping", "Settings"}
+	tw := float32(screenW) / float32(len(names))
 	for i, n := range names {
 		x := float32(i) * tw
 		c := colPanel

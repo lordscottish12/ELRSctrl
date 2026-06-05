@@ -149,6 +149,14 @@ func (p *Port) Write(b []byte) error {
 	return nil
 }
 
+// Read reads available bytes into b. Safe to call concurrently with Write
+// (full-duplex); Close interrupts a blocked Read. Used by the telemetry reader.
+func (p *Port) Read(b []byte) (int, error) { return p.p.Read(b) }
+
+// SetReadTimeout bounds how long Read blocks waiting for data; on timeout Read
+// returns (0, nil). Pass a positive duration so the reader wakes periodically.
+func (p *Port) SetReadTimeout(d time.Duration) error { return p.p.SetReadTimeout(d) }
+
 // Close releases the port.
 func (p *Port) Close() error {
 	if p.p == nil {

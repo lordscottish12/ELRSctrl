@@ -1,11 +1,13 @@
 package ui
 
 import (
+	"fmt"
 	"strconv"
 
 	"github.com/hajimehoshi/ebiten/v2"
 
 	"elrsctrl/internal/config"
+	"elrsctrl/internal/video"
 )
 
 var baudPresets = []int{115200, 420000, 400000, 921600, 416666, 57600}
@@ -107,6 +109,34 @@ func (g *Game) drawSettings(screen *ebiten.Image, p pointer) {
 		}
 	}
 
+	// Video (analog FPV feed shown on the Run screen). Mirrors the port picker:
+	// a device + label list with a "(none)" sentinel, plus a configured-but-absent
+	// fallback so an unplugged dongle still shows instead of silently reverting.
+	type vidChoice struct{ device, label string }
+	vchoices := []vidChoice{{"", "(none)"}}
+	for _, dev := range video.ListDevices() {
+		vchoices = append(vchoices, vidChoice{dev, dev})
+	}
+	vidCur := 0
+	for i, c := range vchoices {
+		if c.device == g.cfg.Video.Device {
+			vidCur = i
+			break
+		}
+	}
+	if g.cfg.Video.Device != "" && vchoices[vidCur].device != g.cfg.Video.Device {
+		vchoices = append(vchoices, vidChoice{g.cfg.Video.Device, g.cfg.Video.Device + "  (not present)"})
+		vidCur = len(vchoices) - 1
+	}
+	if d := f.wideStepper("Video device", trim(vchoices[vidCur].label, 36), 320); d != 0 {
+		g.cfg.Video.Device = vchoices[wrap(vidCur+d, len(vchoices))].device
+		g.applyVideo()
+	}
+	if f.toggle("Video feed", g.cfg.Video.Enabled) {
+		g.cfg.Video.Enabled = !g.cfg.Video.Enabled
+		g.applyVideo()
+	}
+
 	// Action buttons.
 	by := float32(screenH - 76)
 	if button(screen, p, x, by, 180, 54, "Rescan ports", colPanel2) {
@@ -125,21 +155,50 @@ func (g *Game) drawSettings(screen *ebiten.Image, p pointer) {
 		g.setStatus("reset to defaults")
 	}
 
-	// Connection hint on the right.
-	hint := []string{
-		"Connecting the Aeris Link:",
-		"• Power the module from its XT30 (2S / 8.4V).",
-		"• USB-C → in the module web UI set CRSF serial",
-		"  pins to 3/1 and turn UART-inverted OFF.",
-		"• Pick the port at left; baud 115200, addr 0xEE.",
+	// --- Right column: OSD (Run-screen overlay) ---
+	x2, w2 := float32(700), float32(560)
+	drawText(screen, "OSD (Run overlay)", float64(x2), float64(tabH+10), sizeTitle, colText)
+	f2 := &form{screen: screen, p: p, x: x2, w: w2, y: tabH + 52, rowH: 50}
+
+	// Vehicle name: click the field to focus, click anywhere else to commit. Actual
+	// typing is captured in Update (g.updateNameEdit) while g.editName is set.
+	if f2.textRow("Vehicle name", g.cfg.OSD.VehicleName, g.editName) {
+		g.editName = !g.editName
+	} else if p.clicked {
+		g.editName = false
 	}
-	hx := float64(760)
+	if f2.toggle("Crosshair", g.cfg.OSD.Crosshair) {
+		g.cfg.OSD.Crosshair = !g.cfg.OSD.Crosshair
+	}
+	// Nudge the crosshair to the payload's real aim point (±5 px/click).
+	if d := f2.stepper("Crosshair X", fmt.Sprintf("%+d px", g.cfg.OSD.CrosshairX)); d != 0 {
+		g.cfg.OSD.CrosshairX = clampI(g.cfg.OSD.CrosshairX+5*d, -600, 600)
+	}
+	if d := f2.stepper("Crosshair Y", fmt.Sprintf("%+d px", g.cfg.OSD.CrosshairY)); d != 0 {
+		g.cfg.OSD.CrosshairY = clampI(g.cfg.OSD.CrosshairY+5*d, -350, 350)
+	}
+	if f2.toggle("Arm state", g.cfg.OSD.ArmState) {
+		g.cfg.OSD.ArmState = !g.cfg.OSD.ArmState
+	}
+	if f2.toggle("Vehicle name shown", g.cfg.OSD.ShowName) {
+		g.cfg.OSD.ShowName = !g.cfg.OSD.ShowName
+	}
+	if f2.toggle("Video info (debug)", g.cfg.OSD.VideoInfo) {
+		g.cfg.OSD.VideoInfo = !g.cfg.OSD.VideoInfo
+	}
+	if f2.toggle("Telemetry", g.cfg.OSD.Telemetry) {
+		g.cfg.OSD.Telemetry = !g.cfg.OSD.Telemetry
+	}
+
+	// Hints below the OSD column.
+	hint := []string{
+		"Name: type with a keyboard, or edit osd.vehicle_name in the YAML.",
+		"",
+		"Aeris Link: power from XT30 (2S); in the module web UI set CRSF",
+		"serial pins 3/1, UART-inverted OFF; pick the port at left, 115200.",
+	}
 	for i, line := range hint {
-		col := colTextDim
-		if i == 0 {
-			col = colText
-		}
-		drawText(screen, line, hx, float64(tabH+56+i*26), sizeSmall, col)
+		drawText(screen, line, float64(x2), float64(f2.y+16+float32(i)*22), sizeSmall, colTextDim)
 	}
 }
 

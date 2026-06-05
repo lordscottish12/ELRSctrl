@@ -1,0 +1,189 @@
+package ui
+
+import (
+	"fmt"
+	"image/color"
+	"math"
+	"time"
+
+	"github.com/hajimehoshi/ebiten/v2"
+)
+
+// armRects returns the ARM/DISARM and KILL button rectangles, overlaid top-right
+// on the Run screen.
+func armRects() (ax, ay, aw, ah, kx float32) {
+	aw, ah = 160, 64
+	ay = tabH + 22
+	ax = screenW - 360
+	kx = screenW - 180
+	return
+}
+
+// drawRun is the play/drive screen: the live analog FPV feed fills the area below
+// the tabs, with the Betaflight-style OSD and the ARM/DISARM + KILL controls
+// overlaid on top. The full channel readout lives on the Monitor tab; this view
+// stays clean for flying.
+func (g *Game) drawRun(screen *ebiten.Image, p pointer) {
+	snap := g.store.Snapshot()
+	live := snap.Armed && snap.InputOK
+
+	// Video area = everything below the tab bar. Black letterbox underneath.
+	const vx, vy = float32(0), float32(tabH)
+	vw, vh := float32(screenW), float32(screenH-tabH)
+	fillRect(screen, vx, vy, vw, vh, colVideoBG)
+
+	frameOK := false
+	if g.videoCap == nil {
+		drawTextC(screen, "No video — enable a capture device in Settings",
+			screenW/2, (tabH+screenH)/2, sizeTitle, colTextDim)
+	} else if frame, seq := g.videoCap.Buffer().Latest(); frame != nil {
+		// (Re)allocate the GPU texture on first frame or a resolution change,
+		// then upload only when the frame actually advanced.
+		if g.videoTex == nil || g.videoTex.Bounds().Dx() != frame.W || g.videoTex.Bounds().Dy() != frame.H {
+			g.videoTex = ebiten.NewImage(frame.W, frame.H)
+			g.videoSeq = 0
+		}
+		if seq != g.videoSeq {
+			g.videoTex.WritePixels(frame.Pix)
+			g.videoSeq = seq
+		}
+		drawImageFit(screen, g.videoTex, vx, vy, vw, vh)
+		g.updateFPS(seq)
+		frameOK = true
+	} else {
+		msg := g.videoCap.Err()
+		if msg == "" {
+			msg = "Waiting for video…"
+		}
+		drawTextC(screen, msg, screenW/2, (tabH+screenH)/2, sizeTitle, colTextDim)
+	}
+
+	g.drawOSD(screen, vx, vy, vw, vh, live, frameOK)
+
+	// ARM / KILL controls (top-right). Interactive — separate from the OSD indicator.
+	ax, ay, aw, ah, kx := armRects()
+	armLabel, armCol := "DISARMED", colBad
+	if g.armed {
+		armLabel, armCol = "ARMED", colGood
+	}
+	if button(screen, p, ax, ay, aw, ah, armLabel, armCol) {
+		g.armed = !g.armed
+	}
+	if button(screen, p, kx, ay, aw, ah, "KILL", colBad) {
+		g.armed = false
+		g.setStatus("KILL — disarmed")
+	}
+}
+
+// drawOSD renders the toggleable overlay elements within the video area: a center
+// crosshair, arm-state text, the vehicle name, and the capture debug readout. The
+// area center is the image center (the feed is always centered), so the crosshair
+// lands on the picture.
+func (g *Game) drawOSD(screen *ebiten.Image, vx, vy, vw, vh float32, live, frameOK bool) {
+	o := g.cfg.OSD
+	cx := float64(vx + vw/2)
+	top := float64(vy)
+	bottom := float64(vy + vh)
+
+	if o.Crosshair && frameOK {
+		drawCrosshair(screen, vx+vw/2+float32(o.CrosshairX), vy+vh/2+float32(o.CrosshairY))
+	}
+
+	if o.ArmState {
+		label, col := "DISARMED", colBad
+		if g.armed {
+			label, col = "ARMED", colGood
+		}
+		drawTextOutlinedC(screen, label, cx, top+26, sizeTitle, col)
+	}
+	// Failsafe is safety-critical, so it's shown whenever active regardless of toggles.
+	if !live {
+		drawTextOutlinedC(screen, "FAILSAFE", cx, top+58, sizeLabel, colWarn)
+	}
+
+	if o.ShowName && o.VehicleName != "" {
+		drawTextOutlinedC(screen, o.VehicleName, cx, bottom-28, sizeTitle, colText)
+	}
+
+	if o.VideoInfo && g.videoCap != nil {
+		info := g.videoCap.Info()
+		if info == "" {
+			info = g.videoCap.Err()
+		}
+		if frameOK && info != "" {
+			info = fmt.Sprintf("%s  %.0f fps", info, g.vidFPS)
+		}
+		if info != "" {
+			drawTextOutlined(screen, info, float64(vx)+14, bottom-26, sizeSmall, colTextDim)
+		}
+	}
+
+	if o.Telemetry {
+		g.drawTelemetry(screen, float64(vx)+14, top+14)
+	}
+}
+
+// drawTelemetry renders the ELRS link/battery block at (x, y), top-left over the
+// feed. The link line doubles as the connection-health indicator.
+func (g *Game) drawTelemetry(screen *ebiten.Image, x, y float64) {
+	tel := g.store.Telemetry()
+	now := time.Now()
+	const stale = 2 * time.Second
+
+	var line string
+	var col color.Color
+	switch {
+	case tel.LinkValid && now.Sub(tel.LinkAt) < stale:
+		line = fmt.Sprintf("LINK %d%%  %ddBm  %dmW", tel.UplinkLQ, tel.UplinkRSSI, tel.TXPowerMW)
+		switch {
+		case tel.UplinkLQ >= 80:
+			col = colGood
+		case tel.UplinkLQ >= 50:
+			col = colWarn
+		default:
+			col = colBad
+		}
+	case tel.FrameAt.IsZero() || now.Sub(tel.FrameAt) >= stale:
+		line, col = "NO TELEMETRY", colTextDim
+	default:
+		line, col = "NO LINK", colWarn // frames arriving, but no link stats (RX down)
+	}
+	drawTextOutlined(screen, line, x, y, sizeLabel, col)
+
+	if tel.BatteryValid && now.Sub(tel.BattAt) < stale {
+		batt := fmt.Sprintf("%.1fV  %.1fA", tel.Voltage, tel.Current)
+		drawTextOutlined(screen, batt, x, y+24, sizeSmall, colText)
+	}
+}
+
+// updateFPS recomputes the capture frame rate ~once per second from the frame
+// Buffer's monotonically-increasing seq. A seq that went backwards means the device
+// was reopened, so it just rebaselines.
+func (g *Game) updateFPS(seq uint64) {
+	now := time.Now()
+	if g.vidFPSAt.IsZero() || seq < g.vidFPSSeq {
+		g.vidFPSAt, g.vidFPSSeq = now, seq
+		return
+	}
+	if d := now.Sub(g.vidFPSAt); d >= time.Second {
+		g.vidFPS = float64(seq-g.vidFPSSeq) / d.Seconds()
+		g.vidFPSAt, g.vidFPSSeq = now, seq
+	}
+}
+
+// drawImageFit draws src scaled to fit the (x,y,w,h) box, preserving aspect ratio
+// and centering it (letterbox/pillarbox).
+func drawImageFit(dst, src *ebiten.Image, x, y, w, h float32) {
+	sw, sh := src.Bounds().Dx(), src.Bounds().Dy()
+	if sw == 0 || sh == 0 {
+		return
+	}
+	scale := math.Min(float64(w)/float64(sw), float64(h)/float64(sh))
+	ox := float64(x) + (float64(w)-float64(sw)*scale)/2
+	oy := float64(y) + (float64(h)-float64(sh)*scale)/2
+	op := &ebiten.DrawImageOptions{}
+	op.GeoM.Scale(scale, scale)
+	op.GeoM.Translate(ox, oy)
+	op.Filter = ebiten.FilterLinear
+	dst.DrawImage(src, op)
+}

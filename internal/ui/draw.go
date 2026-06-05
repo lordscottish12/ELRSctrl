@@ -31,6 +31,8 @@ var (
 	colWarn    = color.RGBA{0xd9, 0xa3, 0x4a, 0xff}
 	colGrid    = color.RGBA{0x3a, 0x40, 0x48, 0xff}
 	colDim     = color.RGBA{0x00, 0x00, 0x00, 0xb0} // overlay scrim
+	colVideoBG = color.RGBA{0x06, 0x07, 0x09, 0xff} // letterbox behind the video feed
+	colOutline = color.RGBA{0x00, 0x00, 0x00, 0xd0} // OSD text/crosshair outline
 )
 
 var (
@@ -84,6 +86,25 @@ func drawTextR(dst *ebiten.Image, s string, rx, y, size float64, c color.Color) 
 	w, _ := text.Measure(s, face(size), 0)
 	drawText(dst, s, rx-w, y, size, c)
 }
+
+// drawTextOutlinedC draws s centered on (cx, cy) with a near-black 1px outline so
+// it stays legible over arbitrary video frames (OSD text).
+func drawTextOutlinedC(dst *ebiten.Image, s string, cx, cy, size float64, c color.Color) {
+	for _, d := range outlineOffsets {
+		drawTextC(dst, s, cx+d[0], cy+d[1], size, colOutline)
+	}
+	drawTextC(dst, s, cx, cy, size, c)
+}
+
+// drawTextOutlined is drawTextOutlinedC's top-left-anchored sibling (mirrors drawText).
+func drawTextOutlined(dst *ebiten.Image, s string, x, y, size float64, c color.Color) {
+	for _, d := range outlineOffsets {
+		drawText(dst, s, x+d[0], y+d[1], size, colOutline)
+	}
+	drawText(dst, s, x, y, size, c)
+}
+
+var outlineOffsets = [][2]float64{{-1, 0}, {1, 0}, {0, -1}, {0, 1}}
 
 func textWidth(s string, size float64) float64 {
 	w, _ := text.Measure(s, face(size), 0)
@@ -187,6 +208,39 @@ func stepper(dst *ebiten.Image, p pointer, x, y, w, h float32, value string) int
 	strokeRect(dst, x+aw, y, w-2*aw, h, 1, colGrid)
 	drawTextC(dst, value, float64(x+w/2), float64(y+h/2), sizeValue, colText)
 	return delta
+}
+
+// textField draws a boxed editable string and reports a click on it this frame.
+// While editing it gets an accent border and a trailing caret; the caller owns the
+// focus flag and feeds keystrokes in (see Game.editName / Update).
+func textField(dst *ebiten.Image, p pointer, x, y, w, h float32, value string, editing bool) bool {
+	border := colGrid
+	if editing {
+		border = colAccent
+	}
+	fillRect(dst, x, y, w, h, colPanel)
+	strokeRect(dst, x, y, w, h, 1, border)
+	shown := value
+	if editing {
+		shown += "_"
+	}
+	drawText(dst, shown, float64(x+8), float64(y+(h-sizeValue)/2), sizeValue, colText)
+	return p.clicked && p.in(x, y, w, h)
+}
+
+// drawCrosshair draws a Betaflight-style aiming reticle centered on (cx, cy): four
+// ticks around a center gap, each with a dark outline so it reads over any frame.
+func drawCrosshair(dst *ebiten.Image, cx, cy float32) {
+	const gap, length, thick = 6.0, 16.0, 2.0
+	seg := func(x0, y0, x1, y1 float32) {
+		vector.StrokeLine(dst, x0, y0, x1, y1, thick+2, colOutline, true)
+		vector.StrokeLine(dst, x0, y0, x1, y1, thick, colText, true)
+	}
+	seg(cx-gap-length, cy, cx-gap, cy) // left
+	seg(cx+gap, cy, cx+gap+length, cy) // right
+	seg(cx, cy-gap-length, cx, cy-gap) // up
+	seg(cx, cy+gap, cx, cy+gap+length) // down
+	vector.DrawFilledCircle(dst, cx, cy, 2, colText, true)
 }
 
 // channelBar draws a horizontal bar for a value within [min,max] with a center

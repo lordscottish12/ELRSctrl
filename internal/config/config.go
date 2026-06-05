@@ -36,11 +36,36 @@ type SafetyConfig struct {
 	ArmToggle  bool         `yaml:"arm_toggle"`  // true: press toggles; false: hold (deadman)
 }
 
+// VideoConfig selects the analog FPV capture device shown on the Run screen.
+// Disabled by default; zero values are valid so older config files keep loading.
+type VideoConfig struct {
+	Enabled bool   `yaml:"enabled"` // open the capture device on launch / when toggled on
+	Device  string `yaml:"device"`  // V4L2 node, e.g. "/dev/video0" (Linux only)
+}
+
+// OSDConfig configures the Betaflight-style overlay on the Run screen. Each
+// element is independently toggleable; VehicleName is shown bottom-center.
+type OSDConfig struct {
+	VehicleName string `yaml:"vehicle_name"`
+	Crosshair   bool   `yaml:"crosshair"`
+	ArmState    bool   `yaml:"arm_state"`
+	ShowName    bool   `yaml:"show_name"`
+	VideoInfo   bool   `yaml:"video_info"` // debug: capture resolution / format / fps
+	Telemetry   bool   `yaml:"telemetry"`  // ELRS link quality / RSSI / battery
+
+	// Crosshair offset in pixels from the video center, to calibrate the reticle to
+	// a not-quite-centered payload (e.g. a zip-tied water pistol). 0,0 = centered.
+	CrosshairX int `yaml:"crosshair_x"`
+	CrosshairY int `yaml:"crosshair_y"`
+}
+
 // Config is the full persisted profile.
 type Config struct {
 	Serial   SerialConfig       `yaml:"serial"`
 	Sender   SenderConfig       `yaml:"sender"`
 	Safety   SafetyConfig       `yaml:"safety"`
+	Video    VideoConfig        `yaml:"video"`
+	OSD      OSDConfig          `yaml:"osd"`
 	Channels []channels.Channel `yaml:"channels"`
 }
 
@@ -87,6 +112,12 @@ func Default() Config {
 			ArmSource:  input.SrcMenu,
 			KillSource: input.SrcView,
 			ArmToggle:  true,
+		},
+		OSD: OSDConfig{
+			Crosshair: true,
+			ArmState:  true,
+			ShowName:  true,
+			Telemetry: true,
 		},
 		Channels: chans,
 	}
@@ -145,6 +176,16 @@ func (c *Config) normalize() {
 	}
 	if c.Safety.KillSource == "" {
 		c.Safety.KillSource = input.SrcView
+	}
+
+	// OSD: an all-zero struct means the profile predates the OSD — turn on the
+	// standard elements so the feed isn't bare. A profile that sets any OSD field
+	// (incl. a vehicle name) is respected as configured.
+	if c.OSD == (OSDConfig{}) {
+		c.OSD.Crosshair = true
+		c.OSD.ArmState = true
+		c.OSD.ShowName = true
+		c.OSD.Telemetry = true
 	}
 
 	// Always exactly 16 channels.
