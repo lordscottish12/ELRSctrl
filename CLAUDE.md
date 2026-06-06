@@ -163,6 +163,52 @@ hand-rolled path is pure Go: `CGO_ENABLED=0 GOOS=linux go build ./internal/video
 type-checks it from Windows, and `internal/video`'s tests assert the V4L2 struct
 sizes (104/208/20/88) so an ABI layout slip fails a test instead of the Deck.
 
+## Person detection (`internal/detect`) — Phase 1 of target-lock/auto-aim
+
+Run-screen person detection for the water-pistol turret. A `Runner` goroutine pulls
+the latest `video.Frame` from the video `Buffer` at a capped rate, runs a YOLOv8
+person detector, tracks targets across frames (stable IDs via greedy IoU), and
+publishes `[]Track` through a single-slot `TrackBuffer` (drop, never block) — fully
+decoupled from the UI and the transmit loop. The UI overlays boxes on the Run feed,
+mapping frame px → screen px via the rect `drawImageFit` now returns.
+
+Inference is **ONNX Runtime via `github.com/yalue/onnxruntime_go`**, which **dlopens**
+`libonnxruntime.so` at runtime, so the build needs only cgo (no ORT headers/libs at
+compile time). It's **Linux-only** (`detector_onnx.go`, `//go:build linux`) with a
+no-op stub (`detector_stub.go`) so the Windows dev build stays cgo-free — same split
+as `internal/video`. Tracking/NMS/IoU and the YOLO output decode are pure Go and
+unit-tested (the decode test feeds a synthetic tensor, so it needs no model/lib).
+
+Best-effort: if `detect.enabled` is off, or the model / `libonnxruntime.so` is
+missing, detection just stays off (status shows why) — like video. `config.Detect`
+= {enabled, model_path, lib_path, input_size (640), conf (0.4), rate_hz (10)}.
+`Game.applyDetect` owns the runner lifecycle and is re-run by `applyVideo` so a
+device change rebinds to the new Buffer.
+
+**Deck runtime setup (the binary doesn't bundle these):** drop a YOLOv8 person/COCO
+ONNX (`yolo export model=yolov8n.pt format=onnx`, or a prebuilt `yolov8n.onnx`) and
+ONNX Runtime's `libonnxruntime.so` (from the onnxruntime linux-x64 release) onto the
+Deck, and point `detect.model_path` / `detect.lib_path` (absolute) at them. Model
+must be a YOLOv8-family export (person = COCO class 0 → output channel index 4);
+`input_size` must match the export. **Don't** assume detection works without these
+two files present. `detector_onnx.go` auto-sniffs whether box outputs are pixel
+(standard Ultralytics export) or normalized 0..1, and `resolveModelPath`/
+`resolveLibPath` look next to the executable so files can just sit beside `elrsctrl`.
+
+**Target lock + auto-aim (`internal/ui/autoaim.go`).** While armed, `updateTargeting`
+lets the operator pick a person: the **D-pad** cycles left/right through visible
+tracks and `config.AutoAim.LockSource` (default `r3`) autolocks the nearest / releases.
+`updateAutoAim` then drives the configured pan/tilt channels (`AutoAim.PanChannel`/
+`TiltChannel`, 1-based; 0 = off) to hold the locked target's box-center on the
+crosshair — a visual-servo integrator (`integrateAim`) whose aim point is the
+calibrated crosshair (`aimPointFrame` inverts the letterbox; reuses `OSD.Crosshair{X,Y}`).
+It **overrides channel values in `Update` after `engine.Apply`, before the snapshot**,
+and only while armed + locked + target-visible — so the sender's failsafe/disarm
+always wins and only the turret channels ever move. Unset pan/tilt = lock is
+visual-only (boxes + highlight, no motion). The coordinate/control math is pure Go
+and unit-tested in `autoaim_test.go`. Back paddles (L4/L5/R4/R5) are intentionally
+avoided — Desktop-mode Steam hides them behind raw hidraw; the D-pad needs none of that.
+
 ## Inbound telemetry (`internal/crsf` parser + `internal/sender` reader)
 
 ELRS is bidirectional: the module relays CRSF telemetry **back** over the same

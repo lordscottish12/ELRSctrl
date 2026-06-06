@@ -29,6 +29,9 @@ func (g *Game) drawMapping(screen *ebiten.Image, p pointer) {
 		strokeRect(screen, listX, y, listW, rowH-3, 1, colGrid)
 		drawText(screen, fmt.Sprintf("CH%d  %s", i+1, ch.Name), float64(listX+10), float64(y+5), sizeLabel, colText)
 		sub := fmt.Sprintf("%s · %s", string(ch.Type), ch.Source.Label())
+		if r := g.aimRoleIndex(i); r != 0 {
+			sub += " · " + aimRoleLabels[r] // mark turret pan/tilt channels
+		}
 		drawText(screen, sub, float64(listX+10), float64(y+rowH-21), sizeSmall, colTextDim)
 		if p.clicked && p.in(listX, y, listW, rowH-3) {
 			g.selCh = i
@@ -44,7 +47,7 @@ func (g *Game) drawChannelEditor(screen *ebiten.Image, p pointer) {
 
 	drawText(screen, fmt.Sprintf("CH%d — %s", g.selCh+1, c.Name), float64(x), float64(tabH+10), sizeTitle, colText)
 
-	f := &form{screen: screen, p: p, x: x, w: w, y: tabH + 52, rowH: 50}
+	f := &form{screen: screen, p: p, x: x, w: w, y: tabH + 52, rowH: 46}
 
 	if d := f.stepper("Type", string(c.Type)); d != 0 {
 		c.Type = cycleType(c.Type, d)
@@ -57,6 +60,14 @@ func (g *Game) drawChannelEditor(screen *ebiten.Image, p pointer) {
 		if bind {
 			g.bind = bindChannelSource
 		}
+	}
+
+	// Auto-aim role: assign this channel to drive the turret pan/tilt axis (and its
+	// direction) — so the whole thing is configurable on-screen, no YAML on the Deck.
+	// One stepper folds axis + invert: — / Pan / Pan (rev) / Tilt / Tilt (rev).
+	ri := g.aimRoleIndex(g.selCh)
+	if d := f.stepper("Auto-aim", aimRoleLabels[ri]); d != 0 {
+		g.setAimRole(g.selCh, wrap(ri+d, len(aimRoleLabels)))
 	}
 
 	switch c.Type {

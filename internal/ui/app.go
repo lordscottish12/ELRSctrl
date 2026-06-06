@@ -6,6 +6,7 @@ package ui
 
 import (
 	"fmt"
+	"log"
 	"math"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 
 	"elrsctrl/internal/channels"
 	"elrsctrl/internal/config"
+	"elrsctrl/internal/detect"
 	"elrsctrl/internal/input"
 	"elrsctrl/internal/sender"
 	"elrsctrl/internal/serial"
@@ -83,11 +85,29 @@ type Game struct {
 	videoTex *ebiten.Image
 	videoSeq uint64
 
+	// Video capture supervision: auto-(re)open and reopen-on-stall so a flaky UVC
+	// dongle recovers without a physical replug (see superviseVideo).
+	videoErr     string // last open error, shown on Run while retrying
+	videoSeenSeq uint64
+	videoSeenAt  time.Time
+	videoRetryAt time.Time
+
 	// Capture fps, measured in the UI from the frame Buffer's seq for the OSD
 	// video-info readout (recomputed ~once/sec in drawRun).
 	vidFPS    float64
 	vidFPSSeq uint64
 	vidFPSAt  time.Time
+
+	// Person-detection runner (Run-screen target boxes). Decoupled goroutine bound
+	// to the current video Buffer; nil when detection is off / unavailable.
+	detectRun *detect.Runner
+
+	// Target lock + auto-aim. tracks is the latest detection snapshot; lockedID is
+	// the operator-selected target (0 = none); aim integrates the turret position.
+	tracks                          []detect.Track
+	lockedID                        int
+	prevDLeft, prevDRight, prevLockBtn bool
+	aim                             autoAim
 }
 
 // New builds the Game. cfgPath may be "" (Save is then disabled).
@@ -118,20 +138,87 @@ func (g *Game) applyVideo() {
 		g.videoCap = nil
 	}
 	g.videoTex, g.videoSeq = nil, 0
+	// Detection feeds off the video Buffer, so reconcile it whenever video changes
+	// (a new device means a new Buffer to bind the runner to).
+	defer g.applyDetect()
 	if !g.cfg.Video.Enabled || g.cfg.Video.Device == "" {
+		g.videoErr = ""
 		return
 	}
 	cap, err := video.Open(g.cfg.Video.Device)
 	if err != nil {
-		g.setStatus("video: %v", err)
+		if g.videoErr != err.Error() { // surface a new failure once; superviseVideo retries quietly
+			g.setStatus("video: %v", err)
+		}
+		g.videoErr = err.Error()
 		return
 	}
 	g.videoCap = cap
+	g.videoErr = ""
+	g.videoSeenSeq, g.videoSeenAt = 0, time.Now() // start the stall/grace clock
+}
+
+const (
+	videoStallTimeout = 4 * time.Second // no new frame this long -> reopen
+	videoRetryEvery   = 2 * time.Second // throttle open attempts
+)
+
+// superviseVideo keeps the capture alive: it (re)opens the device when video is
+// enabled but not running, and reopens a stalled stream (no new frame within
+// videoStallTimeout). This mirrors the sender's serial reconnection — cheap analog
+// UVC dongles often need a fresh open to actually start streaming, so this recovers
+// on its own instead of requiring a physical replug, and picks a replug up at once.
+func (g *Game) superviseVideo(now time.Time) {
+	if !g.cfg.Video.Enabled || g.cfg.Video.Device == "" {
+		return
+	}
+	if g.videoCap != nil {
+		if _, seq := g.videoCap.Buffer().Latest(); seq != g.videoSeenSeq {
+			g.videoSeenSeq, g.videoSeenAt = seq, now
+			return // frames are flowing
+		}
+		if now.Sub(g.videoSeenAt) < videoStallTimeout {
+			return // still within the start-up / stall grace window
+		}
+	}
+	if now.Sub(g.videoRetryAt) < videoRetryEvery {
+		return
+	}
+	g.videoRetryAt = now
+	g.applyVideo()
+}
+
+// applyDetect reconciles the detection runner with cfg.Detect and the current video
+// capture: stop any existing runner, then start a fresh one bound to the live video
+// Buffer if detection is enabled and a capture is open. Best-effort — a missing
+// model / onnxruntime lib just leaves detection off (status shows why).
+func (g *Game) applyDetect() {
+	if g.detectRun != nil {
+		g.detectRun.Close()
+		g.detectRun = nil
+	}
+	if !g.cfg.Detect.Enabled || g.videoCap == nil {
+		return
+	}
+	det, err := detect.NewDetector(detect.DetectorConfig{
+		ModelPath: g.cfg.Detect.ModelPath,
+		LibPath:   g.cfg.Detect.LibPath,
+		InputSize: g.cfg.Detect.InputSize,
+		Conf:      g.cfg.Detect.Conf,
+	})
+	if err != nil {
+		g.setStatus("detect: %v", err)
+		return
+	}
+	r := detect.NewRunner(det, g.videoCap.Buffer(), g.cfg.Detect.RateHz)
+	r.Start()
+	g.detectRun = r
 }
 
 func (g *Game) setStatus(format string, a ...any) {
 	g.status = fmt.Sprintf(format, a...)
-	g.statusFrames = 180 // ~3s at 60 fps
+	g.statusFrames = 180   // ~3s at 60 fps
+	log.Print(g.status)    // also to stdout — readable in full when launched from a terminal
 }
 
 func (g *Game) refreshPorts() {
@@ -157,6 +244,8 @@ func (g *Game) Update() error {
 	g.updateNameEdit()
 	g.applyArmKill()
 	g.updateCursor()
+	g.superviseVideo(time.Now())
+	g.updateTargeting()
 
 	// Gamepad tab navigation: LB/RB cycle tabs, but only while disarmed (setup
 	// mode) and not mid-bind — so driving inputs and bind capture are never
@@ -173,7 +262,11 @@ func (g *Game) Update() error {
 	}
 	g.prevRB, g.prevLB = rb, lb
 
-	live := g.engine.Apply(g.cfg.Channels, g.in, g.armed, time.Now())
+	now := time.Now()
+	live := g.engine.Apply(g.cfg.Channels, g.in, g.armed, now)
+	// Auto-aim overrides the pan/tilt channels in-place when armed and locked — it
+	// sits upstream of the snapshot, so the sender's failsafe still wins on disarm.
+	g.updateAutoAim(&live, now)
 	fs := channels.FailsafeValues(g.cfg.Channels)
 	g.store.SetSnapshot(state.Snapshot{
 		Live:    live,
@@ -417,7 +510,10 @@ func (g *Game) Draw(screen *ebiten.Image) {
 
 	if g.statusFrames > 0 {
 		fillRect(screen, 0, screenH-30, screenW, 30, colPanel2)
-		drawText(screen, g.status, 12, screenH-26, sizeSmall, colWarn)
+		// Stop long messages (e.g. an ONNX load error) from running under the
+		// bottom-right version string — truncate to the space left of it.
+		avail := float64(screenW-12) - textWidth(version.String(), sizeSmall) - 24
+		drawText(screen, truncToWidth(g.status, sizeSmall, avail), 12, screenH-26, sizeSmall, colWarn)
 	}
 
 	// Build identifier in the bottom-right corner, so a running build can be

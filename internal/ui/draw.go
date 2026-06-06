@@ -111,6 +111,21 @@ func textWidth(s string, size float64) float64 {
 	return w
 }
 
+// truncToWidth shortens s (with a trailing ellipsis) until it fits within maxW px.
+func truncToWidth(s string, size, maxW float64) string {
+	if maxW <= 0 || textWidth(s, size) <= maxW {
+		return s
+	}
+	r := []rune(s)
+	for len(r) > 0 {
+		r = r[:len(r)-1]
+		if textWidth(string(r)+"…", size) <= maxW {
+			return string(r) + "…"
+		}
+	}
+	return "…"
+}
+
 func lighten(c color.RGBA, d uint8) color.RGBA {
 	add := func(v uint8) uint8 {
 		if int(v)+int(d) > 255 {

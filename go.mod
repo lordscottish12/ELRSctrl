@@ -14,6 +14,7 @@ go 1.25.0
 
 require (
 	github.com/hajimehoshi/ebiten/v2 v2.9.9
+	github.com/yalue/onnxruntime_go v1.31.0
 	go.bug.st/serial v1.6.2
 	golang.org/x/image v0.41.0
 	golang.org/x/sys v0.43.0

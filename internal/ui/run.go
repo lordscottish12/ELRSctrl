@@ -34,8 +34,14 @@ func (g *Game) drawRun(screen *ebiten.Image, p pointer) {
 
 	frameOK := false
 	if g.videoCap == nil {
-		drawTextC(screen, "No video — enable a capture device in Settings",
-			screenW/2, (tabH+screenH)/2, sizeTitle, colTextDim)
+		msg := "No video — enable a capture device in Settings"
+		if g.cfg.Video.Enabled && g.cfg.Video.Device != "" { // enabled but not open yet
+			msg = "Connecting to video…"
+			if g.videoErr != "" {
+				msg = "Video: " + g.videoErr + " (retrying)"
+			}
+		}
+		drawTextC(screen, msg, screenW/2, (tabH+screenH)/2, sizeTitle, colTextDim)
 	} else if frame, seq := g.videoCap.Buffer().Latest(); frame != nil {
 		// (Re)allocate the GPU texture on first frame or a resolution change,
 		// then upload only when the frame actually advanced.
@@ -47,7 +53,8 @@ func (g *Game) drawRun(screen *ebiten.Image, p pointer) {
 			g.videoTex.WritePixels(frame.Pix)
 			g.videoSeq = seq
 		}
-		drawImageFit(screen, g.videoTex, vx, vy, vw, vh)
+		ox, oy, dw, dh := drawImageFit(screen, g.videoTex, vx, vy, vw, vh)
+		g.drawDetections(screen, ox, oy, dw, dh, frame.W, frame.H)
 		g.updateFPS(seq)
 		frameOK = true
 	} else {
@@ -99,6 +106,15 @@ func (g *Game) drawOSD(screen *ebiten.Image, vx, vy, vw, vh float32, live, frame
 	// Failsafe is safety-critical, so it's shown whenever active regardless of toggles.
 	if !live {
 		drawTextOutlinedC(screen, "FAILSAFE", cx, top+58, sizeLabel, colWarn)
+	}
+
+	// Target-lock status (only while armed, when detection is running).
+	if g.detectRun != nil && g.armed {
+		if g.lockedID != 0 {
+			drawTextOutlinedC(screen, fmt.Sprintf("LOCKED #%d", g.lockedID), cx, top+88, sizeLabel, colBad)
+		} else if len(visibleTracks(g.tracks)) > 0 {
+			drawTextOutlinedC(screen, "NO LOCK", cx, top+88, sizeSmall, colTextDim)
+		}
 	}
 
 	if o.ShowName && o.VehicleName != "" {
@@ -172,18 +188,51 @@ func (g *Game) updateFPS(seq uint64) {
 }
 
 // drawImageFit draws src scaled to fit the (x,y,w,h) box, preserving aspect ratio
-// and centering it (letterbox/pillarbox).
-func drawImageFit(dst, src *ebiten.Image, x, y, w, h float32) {
+// and centering it (letterbox/pillarbox). It returns the displayed image rect
+// (ox,oy,dw,dh) in screen px, so overlays can map frame coordinates onto it.
+func drawImageFit(dst, src *ebiten.Image, x, y, w, h float32) (ox, oy, dw, dh float32) {
 	sw, sh := src.Bounds().Dx(), src.Bounds().Dy()
 	if sw == 0 || sh == 0 {
-		return
+		return x, y, 0, 0
 	}
 	scale := math.Min(float64(w)/float64(sw), float64(h)/float64(sh))
-	ox := float64(x) + (float64(w)-float64(sw)*scale)/2
-	oy := float64(y) + (float64(h)-float64(sh)*scale)/2
+	dw = float32(float64(sw) * scale)
+	dh = float32(float64(sh) * scale)
+	ox = x + (w-dw)/2
+	oy = y + (h-dh)/2
 	op := &ebiten.DrawImageOptions{}
 	op.GeoM.Scale(scale, scale)
-	op.GeoM.Translate(ox, oy)
+	op.GeoM.Translate(float64(ox), float64(oy))
 	op.Filter = ebiten.FilterLinear
 	dst.DrawImage(src, op)
+	return
+}
+
+// drawDetections overlays the current person tracks, mapping their frame-pixel boxes
+// onto the displayed image rect (ox,oy,dw,dh). Only currently-visible tracks (not
+// coasting on a missed frame) are drawn.
+func (g *Game) drawDetections(screen *ebiten.Image, ox, oy, dw, dh float32, fw, fh int) {
+	if fw == 0 || fh == 0 {
+		return
+	}
+	sx, sy := dw/float32(fw), dh/float32(fh)
+	for _, tr := range g.tracks {
+		locked := tr.ID == g.lockedID
+		if tr.Missed != 0 && !locked {
+			continue // don't clutter with coasting non-locked tracks
+		}
+		x := ox + float32(tr.Box.Min.X)*sx
+		y := oy + float32(tr.Box.Min.Y)*sy
+		w := float32(tr.Box.Dx()) * sx
+		h := float32(tr.Box.Dy()) * sy
+		col, thick, label := colAccent, float32(2), fmt.Sprintf("person %.0f%%", tr.Score*100)
+		if locked {
+			col, thick, label = colBad, 4, "LOCKED "+label // weapon-lock red, bolder
+			if tr.Missed != 0 {
+				label = "LOCKED (coasting)" // last-known box while re-acquiring
+			}
+		}
+		strokeRect(screen, x, y, w, h, thick, col)
+		drawTextOutlined(screen, label, float64(x), float64(y)-18, sizeSmall, col)
+	}
 }

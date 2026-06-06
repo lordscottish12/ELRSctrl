@@ -189,6 +189,10 @@ func (g *Game) drawSettings(screen *ebiten.Image, p pointer) {
 	if f2.toggle("Telemetry", g.cfg.OSD.Telemetry) {
 		g.cfg.OSD.Telemetry = !g.cfg.OSD.Telemetry
 	}
+	if f2.toggle("Detection (people)", g.cfg.Detect.Enabled) {
+		g.cfg.Detect.Enabled = !g.cfg.Detect.Enabled
+		g.applyDetect()
+	}
 
 	// Hints below the OSD column.
 	hint := []string{

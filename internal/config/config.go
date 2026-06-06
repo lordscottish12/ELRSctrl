@@ -43,6 +43,33 @@ type VideoConfig struct {
 	Device  string `yaml:"device"`  // V4L2 node, e.g. "/dev/video0" (Linux only)
 }
 
+// DetectConfig configures the person-detection neural net overlaid on the Run
+// screen (Linux/Deck only). Disabled by default; needs an ONNX model and the
+// onnxruntime shared library present at runtime.
+type DetectConfig struct {
+	Enabled   bool    `yaml:"enabled"`
+	ModelPath string  `yaml:"model_path"`          // YOLOv8-family person/COCO ONNX
+	LibPath   string  `yaml:"lib_path,omitempty"`  // libonnxruntime.so (empty = loader path)
+	InputSize int     `yaml:"input_size,omitempty"` // model square input (default 640)
+	Conf      float64 `yaml:"conf,omitempty"`       // confidence threshold (default 0.4)
+	RateHz    int     `yaml:"rate_hz,omitempty"`    // max inference rate (default 10)
+}
+
+// AutoAimConfig drives the turret to hold a locked person under the crosshair.
+// It's opt-in: with Pan/TiltChannel unset (0) the target lock is visual-only and
+// no channel is moved. The driven channels are overridden (only while armed and
+// locked) upstream of the sender, so failsafe/disarm always win.
+type AutoAimConfig struct {
+	PanChannel  int          `yaml:"pan_channel,omitempty"`  // 1-based RC channel for pan; 0 = off
+	TiltChannel int          `yaml:"tilt_channel,omitempty"` // 1-based RC channel for tilt; 0 = off
+	PanGain     float64      `yaml:"pan_gain,omitempty"`     // slew rate per unit pixel error
+	TiltGain    float64      `yaml:"tilt_gain,omitempty"`
+	PanInvert   bool         `yaml:"pan_invert,omitempty"` // flip if the servo drives the wrong way
+	TiltInvert  bool         `yaml:"tilt_invert,omitempty"`
+	Deadband    float64      `yaml:"deadband,omitempty"`    // normalized error below which it holds still
+	LockSource  input.Source `yaml:"lock_source,omitempty"` // gamepad button to autolock/release
+}
+
 // OSDConfig configures the Betaflight-style overlay on the Run screen. Each
 // element is independently toggleable; VehicleName is shown bottom-center.
 type OSDConfig struct {
@@ -66,6 +93,8 @@ type Config struct {
 	Safety   SafetyConfig       `yaml:"safety"`
 	Video    VideoConfig        `yaml:"video"`
 	OSD      OSDConfig          `yaml:"osd"`
+	Detect   DetectConfig       `yaml:"detect"`
+	AutoAim  AutoAimConfig      `yaml:"autoaim"`
 	Channels []channels.Channel `yaml:"channels"`
 }
 
@@ -186,6 +215,34 @@ func (c *Config) normalize() {
 		c.OSD.ArmState = true
 		c.OSD.ShowName = true
 		c.OSD.Telemetry = true
+	}
+
+	// Detection: backfill sane runtime params (only used when Enabled).
+	if c.Detect.ModelPath == "" {
+		c.Detect.ModelPath = "model.onnx"
+	}
+	if c.Detect.InputSize <= 0 {
+		c.Detect.InputSize = 640
+	}
+	if c.Detect.Conf <= 0 {
+		c.Detect.Conf = 0.4
+	}
+	if c.Detect.RateHz <= 0 {
+		c.Detect.RateHz = 10
+	}
+
+	// Auto-aim: backfill control params (only act when Pan/TiltChannel are set).
+	if c.AutoAim.PanGain <= 0 {
+		c.AutoAim.PanGain = 4
+	}
+	if c.AutoAim.TiltGain <= 0 {
+		c.AutoAim.TiltGain = 4
+	}
+	if c.AutoAim.Deadband <= 0 {
+		c.AutoAim.Deadband = 0.03
+	}
+	if c.AutoAim.LockSource == "" {
+		c.AutoAim.LockSource = input.SrcR3 // right-stick click; rarely mapped
 	}
 
 	// Always exactly 16 channels.

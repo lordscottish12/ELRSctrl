@@ -18,6 +18,38 @@ safety:
   kill_source: view       # button that instantly disarms
   arm_toggle: true        # true: press toggles armed; false: hold-to-arm (deadman)
 
+video:                    # analog FPV feed on the Run screen (Linux/Deck only; UVC capture dongle)
+  enabled: false
+  device: ""              # V4L2 node, e.g. /dev/video0 — pick it in Settings
+
+osd:                      # Run-screen overlay; toggles also live in Settings
+  vehicle_name: ""        # shown bottom-center
+  crosshair: true
+  arm_state: true
+  show_name: true
+  video_info: false       # debug: capture resolution / format / fps
+  telemetry: true         # ELRS link quality / RSSI / battery (needs a bound, powered RX)
+  crosshair_x: 0          # px offset from center — calibrate the reticle to where the payload actually hits
+  crosshair_y: 0
+
+detect:                   # person detection (Linux/Deck; needs an ONNX model + libonnxruntime.so beside the binary)
+  enabled: false
+  model_path: model.onnx  # YOLOv8 person/COCO ONNX; a relative name is found next to the binary
+  lib_path: ""            # libonnxruntime.so; empty = auto-found next to the binary
+  input_size: 640         # must match the model export (320 for a smaller/faster model)
+  conf: 0.4               # detection confidence threshold
+  rate_hz: 10             # max inference rate
+
+autoaim:                  # drive a pan/tilt turret to hold the locked person on the crosshair (opt-in)
+  pan_channel: 0          # 1-based RC channel for pan; 0 = off (target lock stays visual-only)
+  tilt_channel: 0         # 1-based RC channel for tilt; 0 = off
+  pan_gain: 4.0           # higher = faster turret slew per unit aim error
+  tilt_gain: 4.0
+  pan_invert: false       # flip if the turret drives away from the target
+  tilt_invert: false
+  deadband: 0.03          # normalized aim error below which it holds still (anti-jitter)
+  lock_source: r3         # button to autolock the nearest target / release; D-pad left/right pick among targets
+
 # 16 channels. Each: type is one of none | analog | switch2 | switch3 | fixed.
 #
 # source / source2 names:
