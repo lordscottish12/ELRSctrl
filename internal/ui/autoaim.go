@@ -2,7 +2,9 @@ package ui
 
 import (
 	"image"
+	"log"
 	"math"
+	"os"
 	"sort"
 	"time"
 
@@ -12,12 +14,33 @@ import (
 	"elrsctrl/internal/input"
 )
 
-// autoAim holds the integrated turret position while a target is locked. panPos and
-// tiltPos are normalized to [-1,1] within the driven channel's [Min,Max].
+// aimDebugEnv forces the verbose target-lock / auto-aim logging on regardless of the
+// in-app toggle (back-compat / headless capture). The in-app "Auto-aim debug log"
+// setting (config.AutoAim.Debug) is the Deck-friendly way; see g.aimDebug.
+var aimDebugEnv = os.Getenv("AUTOAIM_DEBUG") != ""
+
+// aimDebug reports whether to emit the verbose lock-lifecycle + per-frame aim logging,
+// from either the in-app toggle or the AUTOAIM_DEBUG env override.
+func (g *Game) aimDebug() bool { return g.cfg.AutoAim.Debug || aimDebugEnv }
+
+// autoAim holds the turret control state while a target is locked. panPos and tiltPos
+// are the commanded position, normalized to [-1,1] within the driven channel's
+// [Min,Max]. The PD controller advances once per fresh detection (~10 Hz), so it keeps
+// the previous error and a filtered error-rate per axis for the derivative (braking)
+// term that kills the overshoot a pure integrator shows on this delayed loop.
 type autoAim struct {
 	panPos, tiltPos float64
 	engaged         bool
-	last            time.Time
+	last            time.Time // wall-clock of the last control step (fresh detection)
+	lastSeq         uint64    // detection seq of the last control step
+	havePrev        bool      // smoothed aim point / prevErr / rate are seeded
+	smX, smY        float64   // EMA-smoothed target aim point (frame px) — filters box jitter
+	prevErrX        float64
+	prevErrY        float64
+	rateX           float64 // filtered d(errX)/dt
+	rateY           float64
+	errX, errY      float64   // last control error (smoothed), kept for the debug readout
+	lastLog         time.Time // throttles the per-frame AUTOAIM_DEBUG readout
 }
 
 // updateTargeting refreshes the visible person tracks and, while armed, lets the
@@ -27,11 +50,14 @@ type autoAim struct {
 // state so the boxes still draw on the Monitor-free Run view.
 func (g *Game) updateTargeting() {
 	if g.detectRun != nil {
-		g.tracks, _ = g.detectRun.Latest()
+		g.tracks, g.tracksSeq = g.detectRun.Latest()
 	} else {
-		g.tracks = nil
+		g.tracks, g.tracksSeq = nil, 0
 	}
 	if !g.armed {
+		if g.lockedID != 0 && g.aimDebug() {
+			log.Printf("autoaim: lock cleared (disarmed) id=%d", g.lockedID)
+		}
 		g.lockedID = 0
 		g.prevDLeft, g.prevDRight, g.prevLockBtn = false, false, false
 		return
@@ -41,6 +67,9 @@ func (g *Game) updateTargeting() {
 	// Keep the lock while the tracker still holds the target — even coasting
 	// (Missed > 0) after a brief loss — and only drop it once the tracker gives up.
 	if g.lockedID != 0 && indexOfTrack(g.tracks, g.lockedID) < 0 {
+		if g.aimDebug() {
+			log.Printf("autoaim: lock LOST id=%d — track aged out of tracker (visible now=%d)", g.lockedID, len(vis))
+		}
 		g.lockedID = 0
 	}
 
@@ -48,9 +77,11 @@ func (g *Game) updateTargeting() {
 	right := g.in.Connected && g.in.Pressed(input.SrcDRight)
 	if left && !g.prevDLeft {
 		g.lockedID = stepLock(vis, g.lockedID, -1)
+		g.logLock("d-pad left")
 	}
 	if right && !g.prevDRight {
 		g.lockedID = stepLock(vis, g.lockedID, +1)
+		g.logLock("d-pad right")
 	}
 	g.prevDLeft, g.prevDRight = left, right
 
@@ -58,9 +89,13 @@ func (g *Game) updateTargeting() {
 		g.in.Connected && g.in.Pressed(g.cfg.AutoAim.LockSource)
 	if lockBtn && !g.prevLockBtn {
 		if g.lockedID != 0 {
+			if g.aimDebug() {
+				log.Printf("autoaim: lock released id=%d (lock button)", g.lockedID)
+			}
 			g.lockedID = 0 // release
 		} else {
 			g.lockedID = bestTrack(vis, g.aimPoint()) // grab the target nearest the crosshair
+			g.logLock("lock button")
 		}
 	}
 	g.prevLockBtn = lockBtn
@@ -69,7 +104,18 @@ func (g *Game) updateTargeting() {
 	// recenter button) also drops the lock, so auto-aim stops fighting the recenter
 	// and the rate-mode recenter can actually take effect.
 	if g.lockedID != 0 && g.recenterPressed() {
+		if g.aimDebug() {
+			log.Printf("autoaim: lock released id=%d (recenter)", g.lockedID)
+		}
 		g.lockedID = 0
+	}
+}
+
+// logLock reports a lock acquisition/step under AUTOAIM_DEBUG (no-op when nothing is
+// locked, e.g. stepping with no visible targets).
+func (g *Game) logLock(via string) {
+	if g.aimDebug() && g.lockedID != 0 {
+		log.Printf("autoaim: lock acquired id=%d (%s, visible=%d)", g.lockedID, via, len(visibleTracks(g.tracks)))
 	}
 }
 
@@ -111,46 +157,217 @@ func (g *Game) updateAutoAim(live *[crsf.NumChannels]uint16, now time.Time) {
 		return
 	}
 
-	// Seed from the channels' current values on engage so the turret doesn't jerk.
+	// Seed from the channels' current values on engage so the turret doesn't jerk, and
+	// reset the smoothing/derivative state so the first detection doesn't see a bogus rate.
 	if !g.aim.engaged {
 		g.aim.panPos = seedPos(live, panCh, g.cfg.Channels)
 		g.aim.tiltPos = seedPos(live, tiltCh, g.cfg.Channels)
 		g.aim.last = now
+		g.aim.lastSeq = g.tracksSeq
+		g.aim.havePrev = false
+		g.aim.rateX, g.aim.rateY = 0, 0
 		g.aim.engaged = true
 	}
-	dt := now.Sub(g.aim.last).Seconds()
-	g.aim.last = now
-	if dt < 0 {
-		dt = 0
-	} else if dt > 0.1 { // cap after a UI stall
-		dt = 0.1
-	}
 
-	// Integrate toward the target only on a fresh detection. While the track is
-	// coasting (Missed > 0 — e.g. lost during a fast slew), hold the turret at its
-	// current position instead of reverting to center, giving detection a moment to
-	// re-acquire without the view snapping back.
-	if tr.Missed == 0 {
-		aimX, aimY := aimPointFrame(fw, fh, g.cfg.OSD.CrosshairX, g.cfg.OSD.CrosshairY)
-		cx := float64(tr.Box.Min.X+tr.Box.Max.X) / 2
-		cy := float64(tr.Box.Min.Y+tr.Box.Max.Y) / 2
-		errX := (cx - aimX) / (float64(fw) / 2)
-		errY := (cy - aimY) / (float64(fh) / 2)
+	aimX, aimY := aimPointFrame(fw, fh, g.cfg.OSD.CrosshairX, g.cfg.OSD.CrosshairY)
+
+	// Advance the PD controller only on a *fresh* detection (the measurement updates at
+	// ~10 Hz, not the UI's 60 fps): integrating a stale error every frame, or computing
+	// a derivative from it, is meaningless. While coasting (Missed > 0) or between
+	// detections, hold the last command so the view doesn't snap back and detection gets
+	// a moment to re-acquire.
+	if tr.Missed == 0 && g.tracksSeq != g.aim.lastSeq {
+		dt := now.Sub(g.aim.last).Seconds()
+		g.aim.last = now
+		g.aim.lastSeq = g.tracksSeq
+		if dt <= 0 {
+			dt = 1.0 / 10 // sane fallback for the first/odd interval
+		} else if dt > 0.3 {
+			dt = 0.3 // cap after a stall so the derivative doesn't blow up
+		}
+
+		// Aim point in the box: horizontal center, vertical AimHeight down from the top
+		// (0.25 = upper torso, so a weak jet doesn't drop to the feet).
+		tgtX, tgtY := boxAimPoint(tr.Box, aa.AimHeight)
+
+		// EMA-smooth the aim point before the controller sees it. This filters the
+		// detection box's frame-to-frame jitter so a *tight* deadband can give precise
+		// aim without the turret hunting on noise.
+		const posAlpha = 0.4
+		if g.aim.havePrev {
+			g.aim.smX = posAlpha*tgtX + (1-posAlpha)*g.aim.smX
+			g.aim.smY = posAlpha*tgtY + (1-posAlpha)*g.aim.smY
+		} else {
+			g.aim.smX, g.aim.smY = tgtX, tgtY
+		}
+		errX := (g.aim.smX - aimX) / (float64(fw) / 2)
+		errY := (g.aim.smY - aimY) / (float64(fh) / 2)
+
+		// Filtered apparent target velocity (px-normalized / s) for the derivative brake.
+		const rateAlpha = 0.4
+		if g.aim.havePrev {
+			g.aim.rateX = rateAlpha*((errX-g.aim.prevErrX)/dt) + (1-rateAlpha)*g.aim.rateX
+			g.aim.rateY = rateAlpha*((errY-g.aim.prevErrY)/dt) + (1-rateAlpha)*g.aim.rateY
+		}
+		g.aim.prevErrX, g.aim.prevErrY = errX, errY
+		g.aim.errX, g.aim.errY = errX, errY
+		g.aim.havePrev = true
+
 		if panCh >= 0 {
-			g.aim.panPos = integrateAim(g.aim.panPos, errX, aa.PanGain, aa.Deadband, aa.PanInvert, dt)
+			g.aim.panPos = stepAim(g.aim.panPos, errX, g.aim.rateX, aa.PanGain, aa.Damp, aa.Deadband, aa.PanInvert, dt)
 		}
 		if tiltCh >= 0 {
-			g.aim.tiltPos = integrateAim(g.aim.tiltPos, errY, aa.TiltGain, aa.Deadband, aa.TiltInvert, dt)
+			g.aim.tiltPos = stepAim(g.aim.tiltPos, errY, g.aim.rateY, aa.TiltGain, aa.Damp, aa.Deadband, aa.TiltInvert, dt)
 		}
 	}
 
-	// Drive (or, while coasting, hold) the channels at the current position.
+	// Drive (or, while coasting/between detections, hold) the channels at the current
+	// command.
 	if panCh >= 0 {
 		live[panCh] = posToTicks(g.aim.panPos, g.cfg.Channels[panCh])
 	}
 	if tiltCh >= 0 {
 		live[tiltCh] = posToTicks(g.aim.tiltPos, g.cfg.Channels[tiltCh])
 	}
+
+	// Throttled readout: tgt is the smoothed aim point we drive to the crosshair; watch
+	// whether |err| trends toward 0 (closing on the target) or grows (driving the wrong
+	// way — flip that axis's invert, or confirm with the Run-screen TEST AIM button).
+	if g.aimDebug() && now.Sub(g.aim.lastLog) >= 200*time.Millisecond {
+		g.aim.lastLog = now
+		log.Printf("autoaim: id=%d missed=%d box=(%d,%d,%d,%d) tgt=(%.0f,%.0f) crosshair=(%.0f,%.0f) err=(%+.2f,%+.2f) rate=(%+.2f,%+.2f) pos pan=%+.2f tilt=%+.2f",
+			g.lockedID, tr.Missed, tr.Box.Min.X, tr.Box.Min.Y, tr.Box.Max.X, tr.Box.Max.Y,
+			g.aim.smX, g.aim.smY, aimX, aimY, g.aim.errX, g.aim.errY, g.aim.rateX, g.aim.rateY, g.aim.panPos, g.aim.tiltPos)
+	}
+}
+
+// --- turret direction test (Run screen) ---
+
+// turretTest sweeps the configured pan/tilt channels through up→right→down→left so
+// the operator can confirm the auto-aim axis/direction assignments by watching the
+// turret (and its mounted camera) move. Like auto-aim it overrides only the pan/tilt
+// channels upstream of the snapshot, so the sender's failsafe still wins. It needs the
+// transmitter armed (disarmed = failsafe), and since the gamepad cursor is hidden while
+// armed the test self-arms when started disarmed and disarms again when it ends —
+// armedByTest records that, so a manual arm before the test is left armed afterwards.
+type turretTest struct {
+	active      bool
+	start       time.Time
+	armedByTest bool
+}
+
+// turretTestStepSecs is how long the turret holds each of the four directions.
+const turretTestStepSecs = 1.0
+
+// turretTestDeflect is the fraction of each channel's range the test drives to — short
+// of the endpoints so the direction is obvious without slamming the servo into a stop.
+const turretTestDeflect = 0.8
+
+// turretTestLabels name each phase for the Run-screen readout.
+var turretTestLabels = [...]string{"UP", "RIGHT", "DOWN", "LEFT"}
+
+// startTurretTest kicks off the direction sweep. It refuses only when no pan/tilt
+// channel is assigned (nothing to drive); if disarmed it self-arms for the test's
+// duration so it works without leaving the cursor-hidden armed state to tap UI. armed
+// is forced true each frame by applyArmKill while the test is active.
+func (g *Game) startTurretTest() {
+	if g.cfg.AutoAim.PanChannel == 0 && g.cfg.AutoAim.TiltChannel == 0 {
+		g.setStatus("Assign a Pan/Tilt channel (Mapping) before testing")
+		return
+	}
+	armedByTest := !g.armed
+	g.armed = true
+	g.turretTest = turretTest{active: true, start: time.Now(), armedByTest: armedByTest}
+	if armedByTest {
+		g.setStatus("Turret test (auto-armed): up → right → down → left")
+	} else {
+		g.setStatus("Turret test: up → right → down → left")
+	}
+}
+
+// cancelTurretTest aborts an in-progress test, disarming again if the test was what
+// armed (a manual pre-test arm is left untouched). Called from every disarm path
+// (kill button, panic chord, gamepad disconnect) so a kill always wins over the test's
+// self-arm. Idempotent.
+func (g *Game) cancelTurretTest() {
+	if !g.turretTest.active {
+		return
+	}
+	if g.turretTest.armedByTest {
+		g.armed = false
+	}
+	g.turretTest = turretTest{}
+}
+
+// updateTurretTest drives the pan/tilt channels through the direction sweep while
+// active. It returns true while it owns the channels, so the caller skips auto-aim.
+func (g *Game) updateTurretTest(live *[crsf.NumChannels]uint16, now time.Time) bool {
+	if !g.turretTest.active {
+		return false
+	}
+	if !g.armed { // disarmed out from under us (kill) — abort
+		g.turretTest = turretTest{}
+		return false
+	}
+	phase := turretTestPhase(now.Sub(g.turretTest.start).Seconds())
+	if phase < 0 {
+		// Sequence finished — hand the channels back to mapping/failsafe, and undo the
+		// self-arm so the vehicle returns to disarmed (the safe resting state).
+		if g.turretTest.armedByTest {
+			g.armed = false
+		}
+		g.turretTest = turretTest{}
+		g.setStatus("Turret test complete")
+		return false
+	}
+	aa := g.cfg.AutoAim
+	panCh, tiltCh := aa.PanChannel-1, aa.TiltChannel-1
+	panPos, tiltPos := turretTestPos(phase, aa.PanInvert, aa.TiltInvert)
+	if panCh >= 0 {
+		live[panCh] = posToTicks(panPos, g.cfg.Channels[panCh])
+	}
+	if tiltCh >= 0 {
+		live[tiltCh] = posToTicks(tiltPos, g.cfg.Channels[tiltCh])
+	}
+	return true
+}
+
+// turretTestPhase maps elapsed seconds to a phase index 0..3 (up/right/down/left), or
+// -1 once the four-step sweep is done.
+func turretTestPhase(elapsed float64) int {
+	p := int(elapsed / turretTestStepSecs)
+	if p < 0 || p > 3 {
+		return -1
+	}
+	return p
+}
+
+// turretTestPos returns the normalized pan/tilt positions for a phase, honoring the
+// same invert flags auto-aim uses — so if the turret moves the wrong way here, it
+// would chase a target the wrong way too, and the fix is to flip that axis's invert.
+func turretTestPos(phase int, panInvert, tiltInvert bool) (pan, tilt float64) {
+	switch phase {
+	case 0: // UP: a target above the crosshair gives errY = -1
+		tilt = aimDeflect(-1, tiltInvert)
+	case 1: // RIGHT: a target right of the crosshair gives errX = +1
+		pan = aimDeflect(+1, panInvert)
+	case 2: // DOWN
+		tilt = aimDeflect(+1, tiltInvert)
+	case 3: // LEFT
+		pan = aimDeflect(-1, panInvert)
+	}
+	return
+}
+
+// aimDeflect is the normalized turret position the controller settles at for a constant
+// full-scale error `err` on an axis with the given invert flag, scaled to the test
+// deflection. It mirrors stepAim's steady state (errRate→0, so v=gain·err; invert
+// negates the slew), so a wrong direction here means a wrong direction in auto-aim too.
+func aimDeflect(err float64, invert bool) float64 {
+	if invert {
+		err = -err
+	}
+	return err * turretTestDeflect
 }
 
 // aimPoint is the crosshair aim point in frame pixels for the latest frame.
@@ -222,6 +439,15 @@ func (g *Game) setAimRole(i, state int) {
 
 // --- pure helpers (unit-tested) ---
 
+// boxAimPoint returns the point inside a target box the turret drives onto the
+// crosshair: horizontal center, and heightFrac down from the top (0 = top of head,
+// 0.25 = upper torso, 0.5 = box center, 1 = feet).
+func boxAimPoint(b image.Rectangle, heightFrac float64) (x, y float64) {
+	x = float64(b.Min.X+b.Max.X) / 2
+	y = float64(b.Min.Y) + heightFrac*float64(b.Dy())
+	return
+}
+
 // aimPointFrame maps the on-screen crosshair (video-area center + offset px) back
 // to frame pixels, inverting the Run-screen letterbox. Zero offset = frame center.
 func aimPointFrame(fw, fh, offX, offY int) (float64, float64) {
@@ -234,19 +460,21 @@ func aimPointFrame(fw, fh, offX, offY int) (float64, float64) {
 	return (crossX - ox) / scale, (crossY - oy) / scale
 }
 
-// integrateAim advances a normalized turret position toward reducing the pixel
-// error: it slews at gain*err (units/sec), holds inside the deadband, optionally
-// inverts, and clamps to [-1,1]. As the turret moves the target toward the
-// crosshair, err shrinks and it settles — a simple visual-servo loop.
-func integrateAim(pos, err, gain, deadband float64, invert bool, dt float64) float64 {
+// stepAim advances a normalized turret position with a PD-on-error velocity command:
+// the proportional term (gain·err) slews toward the target, the derivative term
+// (damp·errRate) brakes as the error shrinks — together a lead/PD law that cuts the
+// overshoot a pure integrator shows on a delayed (~10 Hz) visual-servo loop. errRate is
+// the (filtered) apparent target velocity in normalized px/s. Holds inside the
+// deadband, optionally inverts, integrates over dt and clamps to [-1,1].
+func stepAim(pos, err, errRate, gain, damp, deadband float64, invert bool, dt float64) float64 {
 	if math.Abs(err) < deadband {
 		return pos
 	}
-	delta := gain * err * dt
+	v := gain*err + damp*errRate
 	if invert {
-		delta = -delta
+		v = -v
 	}
-	return clampF(pos+delta, -1, 1)
+	return clampF(pos+v*dt, -1, 1)
 }
 
 // posToTicks maps a normalized position [-1,1] to CRSF ticks within [Min,Max].

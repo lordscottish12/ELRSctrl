@@ -10,12 +10,21 @@
 package detect
 
 import (
+	"fmt"
 	"image"
+	"log"
+	"os"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"elrsctrl/internal/video"
 )
+
+// detectDebugEnv lets DETECT_DEBUG=1 force per-inference logging on regardless of the
+// in-app toggle (back-compat / headless capture).
+var detectDebugEnv = os.Getenv("DETECT_DEBUG") != ""
 
 // Detection is one person box in frame pixels with its confidence.
 type Detection struct {
@@ -80,6 +89,7 @@ type Runner struct {
 	tracker Tracker
 	stop    chan struct{}
 	done    chan struct{}
+	debug   atomic.Bool // log per-frame tracks; live-settable from the UI (or DETECT_DEBUG)
 
 	mu      sync.Mutex
 	lastErr string
@@ -91,14 +101,20 @@ func NewRunner(det Detector, src *video.Buffer, rateHz int) *Runner {
 	if rateHz <= 0 {
 		rateHz = 10
 	}
-	return &Runner{
+	r := &Runner{
 		det:  det,
 		src:  src,
 		rate: rateHz,
 		stop: make(chan struct{}),
 		done: make(chan struct{}),
 	}
+	r.debug.Store(detectDebugEnv)
+	return r
 }
+
+// SetDebug toggles per-inference dets/tracks logging while the runner is live (the env
+// var, if set, still forces it on). Safe to call from the UI goroutine.
+func (r *Runner) SetDebug(on bool) { r.debug.Store(on || detectDebugEnv) }
 
 // Start launches the inference goroutine.
 func (r *Runner) Start() { go r.run() }
@@ -123,9 +139,26 @@ func (r *Runner) run() {
 				r.setErr(err.Error())
 				continue
 			}
-			r.out.set(r.tracker.Update(dets))
+			tracks := r.tracker.Update(dets)
+			if r.debug.Load() {
+				logTracks(frame, dets, tracks)
+			}
+			r.out.set(tracks)
 		}
 	}
+}
+
+// logTracks dumps the detection count and each live track (id, box center, missed/age)
+// for one inference under DETECT_DEBUG, so a lock that's "lost" can be traced to the
+// tracker dropping it vs. detection finding nothing.
+func logTracks(f *video.Frame, dets []Detection, tracks []Track) {
+	parts := make([]string, len(tracks))
+	for i, t := range tracks {
+		cx := (t.Box.Min.X + t.Box.Max.X) / 2
+		cy := (t.Box.Min.Y + t.Box.Max.Y) / 2
+		parts[i] = fmt.Sprintf("#%d c=(%d,%d) miss=%d age=%d", t.ID, cx, cy, t.Missed, t.Age)
+	}
+	log.Printf("detect: %dx%d dets=%d tracks=%d [%s]", f.W, f.H, len(dets), len(tracks), strings.Join(parts, " "))
 }
 
 func (r *Runner) setErr(msg string) {

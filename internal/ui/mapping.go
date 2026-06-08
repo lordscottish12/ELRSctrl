@@ -47,7 +47,10 @@ func (g *Game) drawChannelEditor(screen *ebiten.Image, p pointer) {
 
 	drawText(screen, fmt.Sprintf("CH%d — %s", g.selCh+1, c.Name), float64(x), float64(tabH+10), sizeTitle, colText)
 
-	f := &form{screen: screen, p: p, x: x, w: w, y: tabH + 52, rowH: 46}
+	// rowH is a touch tighter than the other screens so a turret channel (most rows,
+	// plus the four auto-aim tuning steppers below) still fits the column without
+	// scrolling.
+	f := &form{screen: screen, p: p, x: x, w: w, y: tabH + 52, rowH: 40}
 
 	if d := f.stepper("Type", string(c.Type)); d != 0 {
 		c.Type = cycleType(c.Type, d)
@@ -69,6 +72,10 @@ func (g *Game) drawChannelEditor(screen *ebiten.Image, p pointer) {
 	if d := f.stepper("Auto-aim", aimRoleLabels[ri]); d != 0 {
 		g.setAimRole(g.selCh, wrap(ri+d, len(aimRoleLabels)))
 	}
+	// When this channel drives a turret axis, expose the loop tuning right here (the
+	// gain is per-axis; deadband + damping are shared) so it's adjustable on the Deck
+	// without YAML. Lower gain / higher damping & deadband if the turret oscillates.
+	g.drawAimTuning(f, ri)
 
 	switch c.Type {
 	case channels.TypeAnalog:
@@ -176,8 +183,41 @@ func (g *Game) drawChannelEditor(screen *ebiten.Image, p pointer) {
 		c.Failsafe = clampI(c.Failsafe+10*d, 0, int(crsf.TicksCeil))
 	}
 
-	drawText(screen, "Tip: tap BIND, then move the stick / press the button you want.",
-		float64(x), float64(screenH-54), sizeSmall, colTextDim)
+	// Tip only on non-turret channels — a turret channel's editor runs long enough
+	// (auto-aim tuning rows) that the tip would overlap the bottom rows.
+	if g.aimRoleIndex(g.selCh) == 0 {
+		drawText(screen, "Tip: tap BIND, then move the stick / press the button you want.",
+			float64(x), float64(screenH-54), sizeSmall, colTextDim)
+	}
+}
+
+// drawAimTuning renders the auto-aim loop tuning steppers for a channel assigned to a
+// turret axis (ri 1/2 = pan, 3/4 = tilt; 0 = not a turret channel → nothing). Gain is
+// per-axis; deadband and damping are shared. Lower gain / raise damping & deadband if
+// the turret oscillates (overshoots and swings back); raise gain if it tracks sluggishly.
+func (g *Game) drawAimTuning(f *form, ri int) {
+	aa := &g.cfg.AutoAim
+	switch ri {
+	case 1, 2: // Pan
+		if d := f.stepper("Pan gain", fmt.Sprintf("%.1f", aa.PanGain)); d != 0 {
+			aa.PanGain = clampF(aa.PanGain+0.5*float64(d), 0.5, 10)
+		}
+	case 3, 4: // Tilt
+		if d := f.stepper("Tilt gain", fmt.Sprintf("%.1f", aa.TiltGain)); d != 0 {
+			aa.TiltGain = clampF(aa.TiltGain+0.5*float64(d), 0.5, 10)
+		}
+	default:
+		return
+	}
+	if d := f.stepper("Aim deadband", fmt.Sprintf("%.2f", aa.Deadband)); d != 0 {
+		aa.Deadband = clampF(aa.Deadband+0.01*float64(d), 0, 0.5)
+	}
+	if d := f.stepper("Aim damping", fmt.Sprintf("%.1f", aa.Damp)); d != 0 {
+		aa.Damp = clampF(aa.Damp+0.1*float64(d), 0, 5)
+	}
+	if d := f.stepper("Aim height", fmt.Sprintf("%.0f%% from top", aa.AimHeight*100)); d != 0 {
+		aa.AimHeight = clampF(aa.AimHeight+0.05*float64(d), 0.05, 0.95)
+	}
 }
 
 // form lays out labeled controls top-to-bottom within a column.

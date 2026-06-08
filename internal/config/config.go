@@ -53,6 +53,7 @@ type DetectConfig struct {
 	InputSize int     `yaml:"input_size,omitempty"` // model square input (default 640)
 	Conf      float64 `yaml:"conf,omitempty"`       // confidence threshold (default 0.4)
 	RateHz    int     `yaml:"rate_hz,omitempty"`    // max inference rate (default 10)
+	Debug     bool    `yaml:"debug,omitempty"`      // log per-inference dets/tracks (also via DETECT_DEBUG)
 }
 
 // AutoAimConfig drives the turret to hold a locked person under the crosshair.
@@ -67,7 +68,10 @@ type AutoAimConfig struct {
 	PanInvert   bool         `yaml:"pan_invert,omitempty"` // flip if the servo drives the wrong way
 	TiltInvert  bool         `yaml:"tilt_invert,omitempty"`
 	Deadband    float64      `yaml:"deadband,omitempty"`    // normalized error below which it holds still
+	Damp        float64      `yaml:"damp,omitempty"`        // derivative gain: brakes on apparent target velocity to kill overshoot
+	AimHeight   float64      `yaml:"aim_height,omitempty"`  // vertical aim point as a fraction down the target box (0=top, 0.25=upper torso, 0.5=center)
 	LockSource  input.Source `yaml:"lock_source,omitempty"` // gamepad button to autolock/release
+	Debug       bool         `yaml:"debug,omitempty"`       // log lock lifecycle + per-frame aim (also via AUTOAIM_DEBUG)
 }
 
 // OSDConfig configures the Betaflight-style overlay on the Run screen. Each
@@ -134,7 +138,7 @@ func Default() Config {
 	chans[3].Type = channels.TypeSwitch2
 	chans[3].Source = input.SrcB
 
-	return Config{
+	c := Config{
 		Serial: SerialConfig{Port: "", Baud: 115200},
 		Sender: SenderConfig{RateHz: 250, Address: "0xEE", StaleMs: 250},
 		Safety: SafetyConfig{
@@ -150,6 +154,8 @@ func Default() Config {
 		},
 		Channels: chans,
 	}
+	c.normalize() // fill auto-aim gains etc. so a fresh/reset profile is fully valid
+	return c
 }
 
 // LoadOrDefault reads path. A missing path (or empty string) returns the default
@@ -231,15 +237,37 @@ func (c *Config) normalize() {
 		c.Detect.RateHz = 10
 	}
 
+	// One-time upgrade of the superseded auto-aim defaults (gain 4 / deadband 0.03):
+	// that combination limit-cycled on the ~10 Hz visual-servo loop. Those exact values
+	// were only ever machine-set defaults, never a deliberate pick, so bump the whole
+	// triple to the gentle new defaults. Keyed on the exact triple so it never disturbs
+	// a hand-tuned profile; re-set via the Mapping sliders to override.
+	if c.AutoAim.PanGain == 4 && c.AutoAim.TiltGain == 4 && c.AutoAim.Deadband == 0.03 {
+		c.AutoAim.PanGain, c.AutoAim.TiltGain, c.AutoAim.Deadband = 0, 0, 0 // fall through to the gentle backfills below
+	}
+
 	// Auto-aim: backfill control params (only act when Pan/TiltChannel are set).
+	// Gains are deliberately gentle and damping is on by default: the loop is a
+	// ~10 Hz visual servo with real dead-time, so a hot gain (the old 4) limit-cycles
+	// (overshoot → swing back → overshoot) until the target leaves frame.
 	if c.AutoAim.PanGain <= 0 {
-		c.AutoAim.PanGain = 4
+		c.AutoAim.PanGain = 2
 	}
 	if c.AutoAim.TiltGain <= 0 {
-		c.AutoAim.TiltGain = 4
+		c.AutoAim.TiltGain = 2
 	}
 	if c.AutoAim.Deadband <= 0 {
-		c.AutoAim.Deadband = 0.03
+		// Small: the detection box is smoothed before the controller sees it, so a tight
+		// deadband gives precise aim (a narrow water jet) without re-chasing jitter.
+		c.AutoAim.Deadband = 0.05
+	}
+	if c.AutoAim.Damp <= 0 {
+		c.AutoAim.Damp = 0.5 // derivative brake on the apparent target velocity
+	}
+	if c.AutoAim.AimHeight <= 0 || c.AutoAim.AimHeight > 1 {
+		// Aim at the upper torso, not the box center: a weak/lobbing jet aimed at center
+		// (waist) tends to fall low (you hit your own feet).
+		c.AutoAim.AimHeight = 0.25
 	}
 	if c.AutoAim.LockSource == "" {
 		c.AutoAim.LockSource = input.SrcR3 // right-stick click; rarely mapped

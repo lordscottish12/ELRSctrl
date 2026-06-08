@@ -47,6 +47,7 @@ const (
 type Game struct {
 	cfg     *config.Config
 	cfgPath string
+	logPath string // where debug logs are written (shown on Settings); "" = terminal only
 	store   *state.Store
 	snd     *sender.Sender
 	reader  *input.Reader
@@ -105,16 +106,20 @@ type Game struct {
 	// Target lock + auto-aim. tracks is the latest detection snapshot; lockedID is
 	// the operator-selected target (0 = none); aim integrates the turret position.
 	tracks                          []detect.Track
+	tracksSeq                       uint64 // detection seq of `tracks` (drives the PD step on fresh frames only)
 	lockedID                        int
 	prevDLeft, prevDRight, prevLockBtn bool
 	aim                             autoAim
+	turretTest                      turretTest // Run-screen pan/tilt direction sweep
 }
 
-// New builds the Game. cfgPath may be "" (Save is then disabled).
-func New(cfg *config.Config, cfgPath string, store *state.Store, snd *sender.Sender, reader *input.Reader) *Game {
+// New builds the Game. cfgPath may be "" (Save is then disabled). logPath is where
+// debug logs are written (shown on the Settings screen); "" = terminal only.
+func New(cfg *config.Config, cfgPath string, store *state.Store, snd *sender.Sender, reader *input.Reader, logPath string) *Game {
 	g := &Game{
 		cfg:        cfg,
 		cfgPath:    cfgPath,
+		logPath:    logPath,
 		store:      store,
 		snd:        snd,
 		reader:     reader,
@@ -211,8 +216,17 @@ func (g *Game) applyDetect() {
 		return
 	}
 	r := detect.NewRunner(det, g.videoCap.Buffer(), g.cfg.Detect.RateHz)
+	r.SetDebug(g.cfg.Detect.Debug)
 	r.Start()
 	g.detectRun = r
+}
+
+// applyDetectDebug pushes the Detect-debug toggle to the live runner (no rebuild of
+// the ONNX session needed). No-op when detection isn't running.
+func (g *Game) applyDetectDebug() {
+	if g.detectRun != nil {
+		g.detectRun.SetDebug(g.cfg.Detect.Debug)
+	}
 }
 
 func (g *Game) setStatus(format string, a ...any) {
@@ -264,9 +278,13 @@ func (g *Game) Update() error {
 
 	now := time.Now()
 	live := g.engine.Apply(g.cfg.Channels, g.in, g.armed, now)
-	// Auto-aim overrides the pan/tilt channels in-place when armed and locked — it
-	// sits upstream of the snapshot, so the sender's failsafe still wins on disarm.
-	g.updateAutoAim(&live, now)
+	// The turret direction test and auto-aim both override the pan/tilt channels
+	// in-place when armed — upstream of the snapshot, so the sender's failsafe still
+	// wins on disarm. The test takes precedence while running; otherwise auto-aim
+	// drives a locked target.
+	if !g.updateTurretTest(&live, now) {
+		g.updateAutoAim(&live, now)
+	}
 	fs := channels.FailsafeValues(g.cfg.Channels)
 	g.store.SetSnapshot(state.Snapshot{
 		Live:    live,
@@ -440,6 +458,7 @@ func (g *Game) applyArmKill() {
 		g.armed = false
 		g.prevArm = false
 		g.panicKillSince = time.Time{}
+		g.cancelTurretTest() // a disconnect aborts the self-armed turret test too
 		return
 	}
 	// Panic-kill chord: LB+RB held >= panicKillHold while armed always disarms,
@@ -455,6 +474,7 @@ func (g *Game) applyArmKill() {
 	case time.Since(g.panicKillSince) >= panicKillHold:
 		g.armed = false
 		g.panicKillSince = time.Time{}
+		g.cancelTurretTest()
 		g.setStatus("PANIC KILL — disarmed (LB+RB)")
 	default:
 		remaining := panicKillHold - time.Since(g.panicKillSince)
@@ -462,14 +482,24 @@ func (g *Game) applyArmKill() {
 	}
 	if g.cfg.Safety.KillSource != input.SrcNone && g.in.Pressed(g.cfg.Safety.KillSource) {
 		g.armed = false
+		g.cancelTurretTest()
 	}
 	armPressed := g.cfg.Safety.ArmSource != input.SrcNone && g.in.Pressed(g.cfg.Safety.ArmSource)
 	if g.cfg.Safety.ArmToggle {
 		if armPressed && !g.prevArm {
 			g.armed = !g.armed
+			if !g.armed {
+				g.cancelTurretTest() // a manual disarm during the test cancels it
+			}
 		}
 	} else {
 		g.armed = armPressed // deadman / hold-to-arm
+	}
+	// The turret direction test forces arm for its duration so it drives pan/tilt even
+	// in hold-to-arm mode. It runs last so the normal arm computation can't disarm
+	// mid-test; the kill paths above clear the test first, so a kill still wins.
+	if g.turretTest.active {
+		g.armed = true
 	}
 	g.prevArm = armPressed
 }

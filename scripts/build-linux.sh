@@ -72,14 +72,20 @@ if [ "$missing" -ne 0 ]; then
 fi
 
 # --- build -------------------------------------------------------------------
-# Stamp a build identifier from git: bN-<shorthash>[-dirty] (N = commit count),
-# baked in via -ldflags so the binary's version string (shown bottom-right in the
-# UI and at startup) matches the commit it came from. The runtime has its own VCS
+# Stamp a build identifier from git: bN-<shorthash>[-dirty.<diffhash>] (N = commit
+# count), baked in via -ldflags so the binary's version string (shown bottom-right in
+# the UI and at startup) matches the commit it came from. The runtime has its own VCS
 # fallback (internal/version), so this only enriches the string with the count.
+# For a dirty tree we append a short hash of the uncommitted diff, so two builds off the
+# same commit but different working changes get distinct ids (and rebuilding identical
+# code reproduces the same id) — otherwise every dirty build looks the same.
 HASH="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
 COUNT="$(git rev-list --count HEAD 2>/dev/null || echo 0)"
 DIRTY=""
-git diff --quiet 2>/dev/null || DIRTY="-dirty"
+if ! git diff --quiet HEAD 2>/dev/null; then
+  DIFFHASH="$(git diff HEAD 2>/dev/null | sha1sum | cut -c1-6)"
+  DIRTY="-dirty.${DIFFHASH}"
+fi
 VERSION="b${COUNT}-${HASH}${DIRTY}"
 
 mkdir -p dist

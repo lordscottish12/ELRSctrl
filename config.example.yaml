@@ -43,12 +43,16 @@ detect:                   # person detection (Linux/Deck; needs an ONNX model + 
 autoaim:                  # drive a pan/tilt turret to hold the locked person on the crosshair (opt-in)
   pan_channel: 0          # 1-based RC channel for pan; 0 = off (target lock stays visual-only)
   tilt_channel: 0         # 1-based RC channel for tilt; 0 = off
-  pan_gain: 4.0           # higher = faster turret slew per unit aim error
-  tilt_gain: 4.0
+  pan_gain: 2.0           # higher = faster turret slew per unit aim error (too high oscillates)
+  tilt_gain: 2.0
   pan_invert: false       # flip if the turret drives away from the target
   tilt_invert: false
-  deadband: 0.03          # normalized aim error below which it holds still (anti-jitter)
+  deadband: 0.05          # normalized aim error below which it holds still (the box is smoothed, so this can be tight)
+  damp: 0.5               # derivative brake on apparent target velocity — raise to cut overshoot/oscillation
+  aim_height: 0.25        # vertical aim point down the target box: 0=head, 0.25=upper torso, 0.5=center, 1=feet
   lock_source: r3         # button to autolock the nearest target / release; D-pad left/right pick among targets
+  # pan_gain/tilt_gain/deadband/damp/aim_height are also tunable live on the Mapping
+  # screen (select the pan or tilt channel) — dial it in on the Deck without editing YAML.
 
 # 16 channels. Each: type is one of none | analog | switch2 | switch3 | fixed.
 #

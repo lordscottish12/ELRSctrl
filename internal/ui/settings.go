@@ -193,17 +193,46 @@ func (g *Game) drawSettings(screen *ebiten.Image, p pointer) {
 		g.cfg.Detect.Enabled = !g.cfg.Detect.Enabled
 		g.applyDetect()
 	}
+	// Debug log toggles — capture a run for diagnosis without typing env vars on the
+	// Deck. (DETECT_DEBUG / AUTOAIM_DEBUG still force them on if set.) Toggling on
+	// reports the log-file path so it's discoverable without a terminal.
+	if f2.toggle("Detect debug log", g.cfg.Detect.Debug) {
+		g.cfg.Detect.Debug = !g.cfg.Detect.Debug
+		g.applyDetectDebug()
+		g.reportLogTarget(g.cfg.Detect.Debug)
+	}
+	if f2.toggle("Auto-aim debug log", g.cfg.AutoAim.Debug) {
+		g.cfg.AutoAim.Debug = !g.cfg.AutoAim.Debug
+		g.reportLogTarget(g.cfg.AutoAim.Debug)
+	}
 
 	// Hints below the OSD column.
+	logHint := "Debug logs → " + trim(g.logPath, 52)
+	if g.logPath == "" {
+		logHint = "Debug logs → terminal only (started with --log off)"
+	}
 	hint := []string{
 		"Name: type with a keyboard, or edit osd.vehicle_name in the YAML.",
+		logHint,
 		"",
-		"Aeris Link: power from XT30 (2S); in the module web UI set CRSF",
-		"serial pins 3/1, UART-inverted OFF; pick the port at left, 115200.",
+		"Aeris Link: CRSF pins 3/1, UART-inverted OFF, 115200 (web UI).",
 	}
 	for i, line := range hint {
 		drawText(screen, line, float64(x2), float64(f2.y+16+float32(i)*22), sizeSmall, colTextDim)
 	}
+}
+
+// reportLogTarget surfaces where debug logs go when a debug toggle is switched on, so
+// it's findable on the Deck without a terminal. No-op when toggling off.
+func (g *Game) reportLogTarget(on bool) {
+	if !on {
+		return
+	}
+	if g.logPath == "" {
+		g.setStatus("debug logging on — terminal only (relaunch without --log off for a file)")
+		return
+	}
+	g.setStatus("debug logging on — writing to %s", g.logPath)
 }
 
 func (g *Game) applyPort()    { g.snd.SetPort(g.cfg.Serial.Port, g.cfg.Serial.Baud) }

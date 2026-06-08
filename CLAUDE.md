@@ -200,14 +200,61 @@ lets the operator pick a person: the **D-pad** cycles left/right through visible
 tracks and `config.AutoAim.LockSource` (default `r3`) autolocks the nearest / releases.
 `updateAutoAim` then drives the configured pan/tilt channels (`AutoAim.PanChannel`/
 `TiltChannel`, 1-based; 0 = off) to hold the locked target's box-center on the
-crosshair — a visual-servo integrator (`integrateAim`) whose aim point is the
-calibrated crosshair (`aimPointFrame` inverts the letterbox; reuses `OSD.Crosshair{X,Y}`).
+crosshair, with its aim point the calibrated crosshair (`aimPointFrame` inverts the
+letterbox; reuses `OSD.Crosshair{X,Y}`). The control law (`stepAim`) is a **PD** velocity
+command: proportional `gain·err` slews toward the target, derivative `damp·errRate`
+(filtered apparent target velocity) brakes to kill overshoot. It's a delayed ~10 Hz
+visual-servo loop, so it **advances only on a fresh detection** (`tracksSeq` change),
+not every UI frame — integrating/differentiating stale boxes is meaningless and a hot
+gain limit-cycles (the original pure integrator at gain 4 oscillated). The aim point in
+the box is `boxAimPoint(box, AimHeight)` — horizontal center, `AimHeight` down from the
+top (default 0.25 = upper torso, so a weak/lobbing jet doesn't fall to the feet) — and
+it's **EMA-smoothed** before the controller sees it, so the detector's box jitter is
+filtered out and a *tight* `Deadband` can give precise aim without re-hunting on noise.
+A small marker on the locked box (`drawDetections`) shows that aim point. Defaults are
+gentle (`PanGain`/`TiltGain` 2, `Deadband` 0.05, `Damp` 0.5, `AimHeight` 0.25); all five
+are live-tunable on the Mapping screen when the pan/tilt channel is selected
+(`drawAimTuning`). `normalize()` one-time-upgrades the superseded hot defaults (gain 4 /
+deadband 0.03) so an old saved profile self-heals.
 It **overrides channel values in `Update` after `engine.Apply`, before the snapshot**,
 and only while armed + locked + target-visible — so the sender's failsafe/disarm
 always wins and only the turret channels ever move. Unset pan/tilt = lock is
 visual-only (boxes + highlight, no motion). The coordinate/control math is pure Go
 and unit-tested in `autoaim_test.go`. Back paddles (L4/L5/R4/R5) are intentionally
 avoided — Desktop-mode Steam hides them behind raw hidraw; the D-pad needs none of that.
+
+**TEST AIM button (Run screen).** Under ARM/KILL when a pan/tilt channel is assigned:
+tapping it runs `updateTurretTest` — a 4-second sweep driving pan/tilt to
+up→right→down→left (each held ~1 s at 0.8 of range), overriding only those channels
+exactly like auto-aim (so failsafe/disarm still win). The OSD names the current
+direction; tap TESTING… to abort. It honors the same invert flags auto-aim uses
+(`turretTestPos`/`aimDeflect` mirror the integrator's steady state), so if the turret
+moves the *wrong* way under test, auto-aim would chase a target the wrong way too — the
+fix is to flip that axis's invert in Mapping. The test needs the TX armed (disarmed =
+failsafe), but because the gamepad cursor is hidden while armed (so you couldn't tap to
+start it), it **self-arms** when started disarmed and disarms again when it ends
+(`turretTest.armedByTest`); a manual pre-test arm is left armed. `applyArmKill` forces
+arm while the test is active so it works in hold-to-arm mode too, but every disarm path
+(Kill button, panic chord, gamepad disconnect, manual disarm) calls `cancelTurretTest`
+first, so a kill always wins. Note self-arm makes *all* channels live for ~4 s, not just
+pan/tilt — keep the sticks/trigger neutral during the test.
+
+**Diagnosing lock loss.** Two debug logs trace the "locks on, moves, then loses the
+target" symptom, each toggled in **Settings** (right column — no env typing on the
+Deck) or forced on via env: **Detect debug log** / `DETECT_DEBUG` logs per-inference
+`dets`/`tracks` (id, center, missed, age) from the detect `Runner` — distinguishing
+"detection found nothing" from "tracker dropped the id". **Auto-aim debug log** /
+`AUTOAIM_DEBUG` logs the lock lifecycle (acquire/release/LOST) and a throttled per-frame
+aim readout (box center, aim point, `err`, pan/tilt pos) — watch whether `|err|` trends
+to 0 (closing in) or grows (driving the wrong way → invert). The toggles are
+`config.Detect.Debug` / `config.AutoAim.Debug`; the detect one pushes live to the
+running goroutine via `Runner.SetDebug` (atomic, no ONNX-session rebuild), the env var
+ORs on top of either. Logs tee to **both stderr and a file** (`main.setupLog` →
+`io.MultiWriter`): `elrsctrl.log` next to the binary by default (truncated each launch),
+overridable with `--log <path>` or disabled with `--log off`. The resolved path is
+passed into `ui.New` and shown on the Settings screen (a hint line + a status line when
+a debug toggle is switched on), so on the Deck you just copy the file off over the
+network — no terminal needed. Lines carry a `log.Ltime` timestamp prefix only.
 
 ## Inbound telemetry (`internal/crsf` parser + `internal/sender` reader)
 

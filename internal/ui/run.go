@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
+	"github.com/hajimehoshi/ebiten/v2/vector"
 )
 
 // armRects returns the ARM/DISARM and KILL button rectangles, overlaid top-right
@@ -75,10 +76,34 @@ func (g *Game) drawRun(screen *ebiten.Image, p pointer) {
 	}
 	if button(screen, p, ax, ay, aw, ah, armLabel, armCol) {
 		g.armed = !g.armed
+		if !g.armed {
+			g.cancelTurretTest()
+		}
 	}
 	if button(screen, p, kx, ay, aw, ah, "KILL", colBad) {
 		g.armed = false
+		g.cancelTurretTest()
 		g.setStatus("KILL — disarmed")
+	}
+
+	// Turret direction test, under the ARM/KILL row — only when an auto-aim channel is
+	// assigned. Tap it (disarmed is fine — it self-arms) to sweep pan/tilt
+	// up→right→down→left and confirm the channel/direction assignments by watching the
+	// turret (and its camera) move; it disarms again when done. Tap TESTING… to abort.
+	if g.cfg.AutoAim.PanChannel != 0 || g.cfg.AutoAim.TiltChannel != 0 {
+		ty := ay + ah + 12
+		label, col := "TEST AIM", colPanel2
+		if g.turretTest.active {
+			label, col = "TESTING… (tap to stop)", colAccent
+		}
+		if button(screen, p, ax, ty, kx+aw-ax, ah, label, col) {
+			if g.turretTest.active {
+				g.cancelTurretTest()
+				g.setStatus("Turret test stopped")
+			} else {
+				g.startTurretTest()
+			}
+		}
 	}
 }
 
@@ -106,6 +131,14 @@ func (g *Game) drawOSD(screen *ebiten.Image, vx, vy, vw, vh float32, live, frame
 	// Failsafe is safety-critical, so it's shown whenever active regardless of toggles.
 	if !live {
 		drawTextOutlinedC(screen, "FAILSAFE", cx, top+58, sizeLabel, colWarn)
+	}
+
+	// Turret direction test readout: name the current sweep direction so the operator
+	// can check it against which way the turret actually moves.
+	if g.turretTest.active {
+		if ph := turretTestPhase(time.Since(g.turretTest.start).Seconds()); ph >= 0 {
+			drawTextOutlinedC(screen, "TEST AIM: "+turretTestLabels[ph], cx, top+58, sizeTitle, colAccent)
+		}
 	}
 
 	// Target-lock status (only while armed, when detection is running).
@@ -234,5 +267,15 @@ func (g *Game) drawDetections(screen *ebiten.Image, ox, oy, dw, dh float32, fw, 
 		}
 		strokeRect(screen, x, y, w, h, thick, col)
 		drawTextOutlined(screen, label, float64(x), float64(y)-18, sizeSmall, col)
+
+		// Mark the aim point on the locked target — horizontal center, AimHeight down
+		// from the box top (where the turret drives onto the crosshair), so the height
+		// calibration is visible.
+		if locked {
+			ax := x + w/2
+			ay := y + h*float32(g.cfg.AutoAim.AimHeight)
+			vector.DrawFilledCircle(screen, ax, ay, 5, colOutline, true)
+			vector.DrawFilledCircle(screen, ax, ay, 3, col, true)
+		}
 	}
 }

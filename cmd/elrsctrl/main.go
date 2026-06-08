@@ -13,9 +13,11 @@ package main
 import (
 	"context"
 	"flag"
+	"io"
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
@@ -30,7 +32,6 @@ import (
 
 func main() {
 	log.SetFlags(log.Ltime)
-	log.Printf("elrsctrl %s", version.String())
 
 	var (
 		cfgPath    = flag.String("config", "config.yaml", "path to the YAML profile (created on first Save)")
@@ -42,8 +43,18 @@ func main() {
 		fullscreen = flag.Bool("fullscreen", false, "start fullscreen (handy on the Steam Deck)")
 		sweepCh    = flag.Int("sweep", 0, "hardware bring-up: sweep this channel (1-16) then exit; requires --port")
 		sweepRate  = flag.Int("sweep-rate", 250, "transmit rate Hz for --sweep")
+		logPath    = flag.String("log", "", "log file path (default: elrsctrl.log next to the binary; also tees to the terminal; \"off\" to disable)")
 	)
 	flag.Parse()
+
+	// Tee logs to a file as well as the terminal, so debug captures can be copied off
+	// the Steam Deck over the network instead of fighting the on-screen keyboard.
+	resolvedLog, closeLog := setupLog(*logPath)
+	defer closeLog()
+	log.Printf("elrsctrl %s", version.String())
+	if resolvedLog != "" {
+		log.Printf("logging to %s", resolvedLog)
+	}
 
 	cfg, err := config.LoadOrDefault(*cfgPath)
 	if err != nil {
@@ -95,7 +106,7 @@ func main() {
 	}()
 
 	reader := &input.Reader{}
-	g := ui.New(&cfg, *cfgPath, store, snd, reader)
+	g := ui.New(&cfg, *cfgPath, store, snd, reader, resolvedLog)
 
 	ebiten.SetWindowSize(1280, 800)
 	ebiten.SetWindowTitle("ELRSctrl — Steam Deck → ELRS")
@@ -116,4 +127,35 @@ func main() {
 	if runErr != nil {
 		log.Fatal(runErr)
 	}
+}
+
+// setupLog tees log output to both the terminal (stderr) and a fresh log file
+// (truncated each launch so it stays small to copy off the Deck). The flag value picks
+// the path: "" → elrsctrl.log next to the binary, "off"/"none" → terminal only, else
+// the given path. Returns the resolved path ("" when no file is in use) and a closer.
+func setupLog(flagVal string) (string, func()) {
+	if flagVal == "off" || flagVal == "none" {
+		return "", func() {}
+	}
+	path := flagVal
+	if path == "" {
+		path = defaultLogPath()
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		log.Printf("log file %s: %v (continuing with terminal logging only)", path, err)
+		return "", func() {}
+	}
+	log.SetOutput(io.MultiWriter(os.Stderr, f))
+	return path, func() { f.Close() }
+}
+
+// defaultLogPath is elrsctrl.log next to the executable — a predictable spot on the
+// Deck (same folder as the binary, where the model/lib also live), independent of the
+// directory the app was launched from. Falls back to the working directory.
+func defaultLogPath() string {
+	if exe, err := os.Executable(); err == nil {
+		return filepath.Join(filepath.Dir(exe), "elrsctrl.log")
+	}
+	return "elrsctrl.log"
 }
