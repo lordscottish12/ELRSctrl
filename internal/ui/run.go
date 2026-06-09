@@ -258,9 +258,9 @@ func (g *Game) drawDetections(screen *ebiten.Image, ox, oy, dw, dh float32, fw, 
 		y := oy + float32(tr.Box.Min.Y)*sy
 		w := float32(tr.Box.Dx()) * sx
 		h := float32(tr.Box.Dy()) * sy
-		col, thick, label := colAccent, float32(2), fmt.Sprintf("person %.0f%%", tr.Score*100)
+		col, thick, label := colAccent, float32(4), fmt.Sprintf("person %.0f%%", tr.Score*100)
 		if locked {
-			col, thick, label = colBad, 4, "LOCKED "+label // weapon-lock red, bolder
+			col, thick, label = colBad, 8, "LOCKED "+label // weapon-lock red, bolder
 			if tr.Missed != 0 {
 				label = "LOCKED (coasting)" // last-known box while re-acquiring
 			}
