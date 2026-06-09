@@ -55,22 +55,31 @@ func NewDetector(cfg DetectorConfig) (Detector, error) {
 		return nil, fmt.Errorf("detect: onnxruntime init (%s): %w", libPath, ortInitErr)
 	}
 
-	inSize := cfg.InputSize
-	if inSize <= 0 {
-		inSize = 640
-	}
 	conf := cfg.Conf
 	if conf <= 0 {
 		conf = 0.4
 	}
 
-	// Read the model's output shape so we don't hardcode 640/80-class.
-	_, outInfo, err := ort.GetInputOutputInfo(modelPath)
+	// Read the model's declared input/output shapes so we don't hardcode 640/80-class.
+	inInfo, outInfo, err := ort.GetInputOutputInfo(modelPath)
 	if err != nil {
 		return nil, fmt.Errorf("detect: read model io: %w", err)
 	}
 	if len(outInfo) == 0 || len(outInfo[0].Dimensions) != 3 {
 		return nil, fmt.Errorf("detect: unexpected model output (need YOLOv8 [1,C,anchors])")
+	}
+
+	// Prefer the model's own fixed input size (NCHW [1,3,S,S]) so switching between, say,
+	// a 320 and a 640 export "just works" with no config edit. Fall back to cfg/640 only
+	// when the export uses a dynamic spatial axis.
+	inSize := cfg.InputSize
+	if inSize <= 0 {
+		inSize = 640
+	}
+	if len(inInfo) > 0 && len(inInfo[0].Dimensions) == 4 {
+		if h, w := inInfo[0].Dimensions[2], inInfo[0].Dimensions[3]; h > 0 && h == w {
+			inSize = int(h)
+		}
 	}
 	channels := int(outInfo[0].Dimensions[1])
 	anchors := int(outInfo[0].Dimensions[2])

@@ -181,17 +181,25 @@ unit-tested (the decode test feeds a synthetic tensor, so it needs no model/lib)
 
 Best-effort: if `detect.enabled` is off, or the model / `libonnxruntime.so` is
 missing, detection just stays off (status shows why) — like video. `config.Detect`
-= {enabled, model_path, lib_path, input_size (640), conf (0.4), rate_hz (10)}.
-`Game.applyDetect` owns the runner lifecycle and is re-run by `applyVideo` so a
-device change rebinds to the new Buffer.
+= {enabled, model_path, lib_path, input_size (fallback only — see below), conf (0.4),
+rate_hz (10)}. `Game.applyDetect` owns the runner lifecycle and is re-run by `applyVideo`
+so a device change rebinds to the new Buffer. The **Settings** screen has a **model
+picker** (lists `*.onnx` files beside the binary via `detectModelFiles`, switches
+`model_path` + rebuilds) and a live **rate stepper** (`Runner.SetRate`, no model reload —
+the run loop resets its ticker). Trade resolution for Hz here: a smaller export = faster
+= less tracking lag, at the cost of small/far-target detection (fine for a short-range
+water pistol). `input_size` is now **auto-read from the model's input tensor** in
+`NewDetector`, so swapping a 320 ↔ 640 export needs no config edit (`config.input_size`
+is only a fallback for dynamic-axis exports).
 
 **Deck runtime setup (the binary doesn't bundle these):** drop a YOLOv8 person/COCO
 ONNX (`yolo export model=yolov8n.pt format=onnx`, or a prebuilt `yolov8n.onnx`) and
 ONNX Runtime's `libonnxruntime.so` (from the onnxruntime linux-x64 release) onto the
 Deck, and point `detect.model_path` / `detect.lib_path` (absolute) at them. Model
-must be a YOLOv8-family export (person = COCO class 0 → output channel index 4);
-`input_size` must match the export. **Don't** assume detection works without these
-two files present. `detector_onnx.go` auto-sniffs whether box outputs are pixel
+must be a YOLOv8-family export (person = COCO class 0 → output channel index 4); its
+input size is read from the model, so any square export (320/416/640) works as-is — drop
+several beside the binary and pick one in Settings. **Don't** assume detection works
+without these two files present. `detector_onnx.go` auto-sniffs whether box outputs are pixel
 (standard Ultralytics export) or normalized 0..1, and `resolveModelPath`/
 `resolveLibPath` look next to the executable so files can just sit beside `elrsctrl`.
 

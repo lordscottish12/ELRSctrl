@@ -84,7 +84,7 @@ func (b *TrackBuffer) Latest() ([]Track, uint64) {
 type Runner struct {
 	det     Detector
 	src     *video.Buffer
-	rate    int
+	rate    atomic.Int64 // max inference rate (Hz); live-settable so the UI can retune without a model reload
 	out     TrackBuffer
 	tracker Tracker
 	stop    chan struct{}
@@ -104,10 +104,10 @@ func NewRunner(det Detector, src *video.Buffer, rateHz int) *Runner {
 	r := &Runner{
 		det:  det,
 		src:  src,
-		rate: rateHz,
 		stop: make(chan struct{}),
 		done: make(chan struct{}),
 	}
+	r.rate.Store(int64(rateHz))
 	r.debug.Store(detectDebugEnv)
 	return r
 }
@@ -116,12 +116,22 @@ func NewRunner(det Detector, src *video.Buffer, rateHz int) *Runner {
 // var, if set, still forces it on). Safe to call from the UI goroutine.
 func (r *Runner) SetDebug(on bool) { r.debug.Store(on || detectDebugEnv) }
 
+// SetRate changes the max inference rate (Hz) live — the run loop resets its ticker on
+// the next tick — so the UI can retune detection rate without rebuilding the detector
+// (no ONNX reload). Ignored if hz <= 0. Safe to call from the UI goroutine.
+func (r *Runner) SetRate(hz int) {
+	if hz > 0 {
+		r.rate.Store(int64(hz))
+	}
+}
+
 // Start launches the inference goroutine.
 func (r *Runner) Start() { go r.run() }
 
 func (r *Runner) run() {
 	defer close(r.done)
-	t := time.NewTicker(time.Second / time.Duration(r.rate))
+	rate := int(r.rate.Load())
+	t := time.NewTicker(time.Second / time.Duration(rate))
 	defer t.Stop()
 	var lastSeq uint64
 	for {
@@ -129,6 +139,10 @@ func (r *Runner) run() {
 		case <-r.stop:
 			return
 		case <-t.C:
+			if nr := int(r.rate.Load()); nr != rate && nr > 0 {
+				rate = nr // rate changed live (SetRate) — re-pace the ticker
+				t.Reset(time.Second / time.Duration(rate))
+			}
 			frame, seq := r.src.Latest()
 			if frame == nil || seq == lastSeq {
 				continue // no new frame since last inference

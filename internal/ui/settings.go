@@ -2,7 +2,11 @@ package ui
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/hajimehoshi/ebiten/v2"
 
@@ -158,7 +162,9 @@ func (g *Game) drawSettings(screen *ebiten.Image, p pointer) {
 	// --- Right column: OSD (Run-screen overlay) ---
 	x2, w2 := float32(700), float32(560)
 	drawText(screen, "OSD (Run overlay)", float64(x2), float64(tabH+10), sizeTitle, colText)
-	f2 := &form{screen: screen, p: p, x: x2, w: w2, y: tabH + 52, rowH: 50}
+	// Slightly tighter rows: the detection model picker / rate steppers push this column
+	// long enough that 50px would run under the hints.
+	f2 := &form{screen: screen, p: p, x: x2, w: w2, y: tabH + 52, rowH: 44}
 
 	// Vehicle name: click the field to focus, click anywhere else to commit. Actual
 	// typing is captured in Update (g.updateNameEdit) while g.editName is set.
@@ -193,6 +199,33 @@ func (g *Game) drawSettings(screen *ebiten.Image, p pointer) {
 		g.cfg.Detect.Enabled = !g.cfg.Detect.Enabled
 		g.applyDetect()
 	}
+	// Model picker: any *.onnx files beside the binary, so you can A/B a fast low-res
+	// export against a higher-res one without YAML. Re-export at the size you want with
+	// `yolo export model=yolov8n.pt format=onnx imgsz=320`; the app reads each model's
+	// input size automatically. The configured model is included even if not on disk yet.
+	models := detectModelFiles()
+	curModel := filepath.Base(g.cfg.Detect.ModelPath)
+	if curModel == "" || curModel == "." {
+		curModel = "model.onnx"
+	}
+	if indexOfStr(models, curModel) < 0 {
+		models = append([]string{curModel}, models...)
+	}
+	if len(models) > 1 {
+		mi := indexOfStr(models, curModel)
+		if d := f2.wideStepper("Detect model", trim(models[mi], 28), 300); d != 0 {
+			g.cfg.Detect.ModelPath = models[wrap(mi+d, len(models))]
+			g.applyDetect() // rebuilds the detector — reloads the ONNX, re-reads its input size
+		}
+	}
+	// Detection rate (Hz). Higher = less tracking lag / overshoot, at more CPU; pair a
+	// higher rate with a smaller model. Applied live — no model reload.
+	if d := f2.stepper("Detect rate Hz", strconv.Itoa(g.cfg.Detect.RateHz)); d != 0 {
+		g.cfg.Detect.RateHz = clampI(g.cfg.Detect.RateHz+5*d, 5, 60)
+		if g.detectRun != nil {
+			g.detectRun.SetRate(g.cfg.Detect.RateHz)
+		}
+	}
 	// Debug log toggles — capture a run for diagnosis without typing env vars on the
 	// Deck. (DETECT_DEBUG / AUTOAIM_DEBUG still force them on if set.) Toggling on
 	// reports the log-file path so it's discoverable without a terminal.
@@ -214,7 +247,6 @@ func (g *Game) drawSettings(screen *ebiten.Image, p pointer) {
 	hint := []string{
 		"Name: type with a keyboard, or edit osd.vehicle_name in the YAML.",
 		logHint,
-		"",
 		"Aeris Link: CRSF pins 3/1, UART-inverted OFF, 115200 (web UI).",
 	}
 	for i, line := range hint {
@@ -280,4 +312,42 @@ func indexOfInt(s []int, v int) int {
 		}
 	}
 	return -1
+}
+
+func indexOfStr(s []string, v string) int {
+	for i, x := range s {
+		if x == v {
+			return i
+		}
+	}
+	return -1
+}
+
+// detectModelFiles lists the *.onnx files sitting next to the executable (and in the
+// working directory), by base name, so the Settings model picker can offer them without
+// any YAML — drop a 320 and a 640 export beside the binary and switch between them.
+func detectModelFiles() []string {
+	seen := map[string]bool{}
+	var out []string
+	dirs := []string{"."}
+	if exe, err := os.Executable(); err == nil {
+		dirs = append(dirs, filepath.Dir(exe))
+	}
+	for _, d := range dirs {
+		entries, err := os.ReadDir(d)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			if n := e.Name(); strings.EqualFold(filepath.Ext(n), ".onnx") && !seen[n] {
+				seen[n] = true
+				out = append(out, n)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
 }
