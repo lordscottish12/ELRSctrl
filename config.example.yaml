@@ -37,7 +37,8 @@ detect:                   # person detection (Linux/Deck; needs an ONNX model + 
   model_path: model.onnx  # YOLOv8 person/COCO ONNX; a relative name is found next to the binary
   lib_path: ""            # libonnxruntime.so; empty = auto-found next to the binary
   input_size: 640         # must match the model export (320 for a smaller/faster model)
-  conf: 0.4               # detection confidence threshold
+  conf: 0.4               # primary (high) detection confidence threshold
+  conf_low: 0.15          # low-tier floor for the tracker's ByteTrack recovery stage
   rate_hz: 10             # max inference rate
 
 autoaim:                  # drive a pan/tilt turret to hold the locked person on the crosshair (opt-in)

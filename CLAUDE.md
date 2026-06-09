@@ -166,11 +166,28 @@ sizes (104/208/20/88) so an ABI layout slip fails a test instead of the Deck.
 ## Person detection (`internal/detect`) — Phase 1 of target-lock/auto-aim
 
 Run-screen person detection for the water-pistol turret. A `Runner` goroutine pulls
-the latest `video.Frame` from the video `Buffer` at a capped rate, runs a YOLOv8
-person detector, tracks targets across frames (stable IDs via greedy IoU), and
-publishes `[]Track` through a single-slot `TrackBuffer` (drop, never block) — fully
-decoupled from the UI and the transmit loop. The UI overlays boxes on the Run feed,
-mapping frame px → screen px via the rect `drawImageFit` now returns.
+the latest `video.Frame` from the video `Buffer` at a capped rate, runs a YOLOv8-family
+person detector (default export is **yolo11n** — drop-in for yolov8n: same output
+layout, faster + more accurate on CPU), tracks targets across frames (see the kalman
+tracker below), and publishes `[]Track` through a single-slot `TrackBuffer` (drop,
+never block) — fully decoupled from the UI and the transmit loop. The UI overlays boxes
+on the Run feed, mapping frame px → screen px via the rect `drawImageFit` now returns.
+
+**Tracking (`kalman.go`).** The sole tracker is a constant-velocity (fixed-gain
+alpha-beta) filter: each track carries a filtered center/size + velocity, so it matches
+detections against the *predicted* box (holds ID through a fast/panned zero-IoU jump)
+and **coasts forward** along its velocity through a missed frame instead of freezing.
+Gains are **per-axis** — a turret target moves almost entirely horizontally, so it
+learns + coasts horizontal velocity far longer (`predDecayX` high) than vertical
+(`predDecayY`/`velocityGainY` low), since vertical box motion is mostly artifact (subject
+clipped at the frame edge when close, or the scene sliding under tilt). A
+prediction-trust cap (velocity decays each missed frame, track dropped after
+`MaxMissed`) stops a lost target extrapolating off to nothing. Association is
+**ByteTrack** two-stage: the detector emits a low tier down to `conf_low`; stage 1
+matches tracks to high-conf (`conf`) dets, stage 2 re-anchors leftover tracks to
+low-conf dets (low dets never spawn, so weak boxes continue a lock but can't create a
+phantom). The earlier greedy IoU tracker (+ its A/B toggle) was retired once this was
+validated on the Deck.
 
 Inference is **ONNX Runtime via `github.com/yalue/onnxruntime_go`**, which **dlopens**
 `libonnxruntime.so` at runtime, so the build needs only cgo (no ORT headers/libs at
@@ -212,9 +229,12 @@ crosshair, with its aim point the calibrated crosshair (`aimPointFrame` inverts 
 letterbox; reuses `OSD.Crosshair{X,Y}`). The control law (`stepAim`) is a **PD** velocity
 command: proportional `gain·err` slews toward the target, derivative `damp·errRate`
 (filtered apparent target velocity) brakes to kill overshoot. It's a delayed ~10 Hz
-visual-servo loop, so it **advances only on a fresh detection** (`tracksSeq` change),
-not every UI frame — integrating/differentiating stale boxes is meaningless and a hot
-gain limit-cycles (the original pure integrator at gain 4 oscillated). The aim point in
+visual-servo loop, so it **advances once per fresh tracker output** (`tracksSeq` change),
+not every UI frame — stepping every frame would integrate a stale error / differentiate
+noise, and a hot gain limit-cycles (the original pure integrator at gain 4 oscillated).
+It advances **while coasting (`Missed > 0`) too**, driving onto the kalman tracker's
+*predicted* box so a brief occlusion keeps tracking instead of freezing mid-slew; the
+tracker's velocity decay caps how far that rides. The aim point in
 the box is `boxAimPoint(box, AimHeight)` — horizontal center, `AimHeight` down from the
 top (default 0.25 = upper torso, so a weak/lobbing jet doesn't fall to the feet) — and
 it's **EMA-smoothed** before the controller sees it, so the detector's box jitter is

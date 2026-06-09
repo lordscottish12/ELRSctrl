@@ -266,9 +266,19 @@ frames are arriving at all — if it stays `0`, the module isn't relaying teleme
 
 ## 6. Person detection & auto-aim
 
-On-device person detection (YOLOv8 via ONNX Runtime) draws a box on each detected
-person; you lock one with the gamepad, and — if a turret is configured — auto-aim
-holds it under the crosshair. Linux/Deck only; on Windows detection is a no-op stub.
+On-device person detection (a YOLOv8-family ONNX model via ONNX Runtime — **yolo11n**
+by default) draws a box on each detected person; you lock one with the gamepad, and —
+if a turret is configured — auto-aim holds it under the crosshair. Linux/Deck only; on
+Windows detection is a no-op stub.
+
+**Tracking.** Detections are linked across frames by a constant-velocity (Kalman-style)
+tracker, so a locked person keeps a stable ID and the aim stays smooth. It matches on
+the *predicted* box (a fast or camera-panned target doesn't swap IDs), **rides the last
+velocity through a brief occlusion** instead of freezing when the box drops, and uses
+**ByteTrack** two-stage association to hold the lock through low-confidence frames (a
+target turning side-on, partial cover). Prediction is biased to the horizontal — people
+move sideways far more than vertically — so a clipped or tilting box doesn't drag the
+aim up and down.
 
 ### Runtime files (not bundled)
 
@@ -279,12 +289,13 @@ Detection needs two files that aren't in the binary, both placed **next to `elrs
    API matches the Go binding — **1.26.0 is verified**; a newer release should also
    work but may need a newer glibc/libstdc++ than SteamOS has. Copy the real
    `lib/libonnxruntime.so.<ver>` in as `libonnxruntime.so`.
-2. **A model** — a YOLOv8 person/COCO ONNX. Export with
-   `pip install ultralytics && yolo export model=yolov8n.pt format=onnx`, or use a
-   prebuilt `yolov8n.onnx`. Name it `model.onnx` (the default) or point `detect.model_path`
-   at it. (`input_size` must match the export — 640 for a stock export, 320 for a
-   smaller/faster one.) The decoder auto-handles both pixel- and normalized-coordinate
-   exports.
+2. **A model** — a YOLOv8-family person/COCO ONNX. **yolo11n** is recommended (faster +
+   more accurate on CPU than yolov8n, same output format): `pip install ultralytics &&
+   yolo export model=yolo11n.pt format=onnx` (yolov8n still works). Name it `model.onnx`
+   (the default) or point `detect.model_path` at it. The input size is **read from the
+   model**, so 320/416/640 exports all just work — drop several beside the binary and
+   pick one in **Settings → Detect model**. The decoder auto-handles both pixel- and
+   normalized-coordinate exports.
 
 ```
 ~/elrsctrl/
@@ -295,7 +306,9 @@ Detection needs two files that aren't in the binary, both placed **next to `elrs
 ```
 
 Then set `detect.enabled: true` (or toggle **Detection** in Settings), enable video,
-and open **Run**. Tune speed with `detect.rate_hz` and `detect.input_size`.
+and open **Run**. Trade speed for range with the **model** (a smaller export = faster)
+and `detect.rate_hz` (both live in Settings); `detect.conf` / `detect.conf_low` set the
+detection and lock-recovery confidence thresholds.
 
 ### Targeting (gamepad, while armed)
 
@@ -316,19 +329,26 @@ lock is purely visual (boxes + highlight, no motion). Configure it in `config.ya
 autoaim:
   pan_channel: 5      # 1-based RC channel wired to the pan servo; 0 = off
   tilt_channel: 6     # tilt servo; 0 = off
-  pan_gain: 4.0       # higher = faster turret slew per unit aim error
-  tilt_gain: 4.0
+  pan_gain: 2.0       # higher = faster turret slew per unit aim error
+  tilt_gain: 2.0
   pan_invert: false   # flip if the turret drives away from the target
   tilt_invert: false
-  deadband: 0.03      # normalized aim error below which it holds still (anti-jitter)
+  deadband: 0.05      # normalized aim error below which it holds still (anti-jitter)
+  damp: 0.5           # derivative brake on apparent target velocity — kills overshoot
+  aim_height: 0.25    # aim point down the box (0=head, 0.25=upper torso, 0.5=center)
   lock_source: r3     # autolock/release button
 ```
 
-While **armed and locked**, it integrates the pan/tilt channels to put the target's
-box-center on your calibrated crosshair. **Tuning:** start with one axis (set only
-`pan_channel`) to confirm direction — if it drives *away* from the target, flip
-`pan_invert`. If it oscillates, lower the gain; if sluggish, raise it; bump `deadband`
-if it jitters when centered.
+While **armed and locked**, a **PD controller** drives the pan/tilt channels to hold the
+target on your calibrated crosshair: the proportional term slews toward the aim point
+(`aim_height` down the box — upper torso by default, so a lobbing water jet doesn't fall
+to the feet), and the `damp` derivative term brakes as it closes in to kill the
+overshoot a delayed ~10 Hz visual loop otherwise shows. **Tuning:** start with one axis
+(set only `pan_channel`) to confirm direction — if it drives *away*, flip `pan_invert`.
+If it oscillates, lower the gain or raise `damp`; if sluggish, raise the gain; widen
+`deadband` if it jitters when centered. All five (`pan/tilt_gain`, `deadband`, `damp`,
+`aim_height`) are **live-tunable on the Mapping screen** when a pan/tilt channel is
+selected — no YAML round-trip.
 
 **Safety:** auto-aim only overrides the configured pan/tilt channels, only while armed
 + locked + the target is visible, and it does so **upstream of the sender's failsafe**.
@@ -343,7 +363,9 @@ See [`config.example.yaml`](config.example.yaml) for the full annotated format �
 `serial`, `sender`, `safety`, `video`, `osd`, `detect`, `autoaim`, and the 16 channel
 definitions (with source names and tick values). Anything there can also be set live in
 the app's Settings/Mapping screens and saved (the OSD/video toggles, bindings, channel
-mapping); the `detect`/`autoaim` paths and gains are YAML-only.
+mapping); the detection **model** + **rate** are live in Settings and the auto-aim
+**gains/damp/aim_height** are live on the Mapping screen, while the remaining
+`detect`/`autoaim` fields (channel assignments, thresholds) are YAML-only.
 
 ---
 
@@ -387,12 +409,13 @@ tests are in [`internal/crsf`](internal/crsf).
   ORT build is too new for SteamOS; grab an older-toolchain release.
 - **Detection: "model.onnx doesn't exist":** name your model `model.onnx` next to the
   binary, or set `detect.model_path`.
-- **Boxes are wrong / nothing detected:** confirm it's a YOLOv8-family export at the
-  configured `input_size`; toggle **Video info** to check the feed is live.
+- **Boxes are wrong / nothing detected:** confirm it's a YOLOv8-family export
+  (yolov8n / yolo11n); toggle **Video info** to check the feed is live.
 - **Telemetry rx stays 0:** the module isn't relaying CRSF telemetry — needs a bound,
   powered RX and telemetry enabled on the module; it's upstream of the app.
-- **Auto-aim drives the wrong way / hunts:** flip `pan_invert`/`tilt_invert`; lower the
-  gain if it oscillates, raise it if sluggish; increase `deadband` for jitter.
+- **Auto-aim drives the wrong way / hunts:** flip `pan_invert`/`tilt_invert`; if it
+  oscillates lower the gain or raise `damp`, raise the gain if sluggish; increase
+  `deadband` for jitter. The gains/`damp` are live on the Mapping screen.
 
 ---
 

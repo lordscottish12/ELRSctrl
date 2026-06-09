@@ -36,55 +36,5 @@ func TestNMS(t *testing.T) {
 	}
 }
 
-func TestTrackerCentroidAssociation(t *testing.T) {
-	// A camera pan slides the box clear of its previous overlap (IoU 0) but only by
-	// ~one box-width — the centroid fallback should keep the same ID, not spawn one.
-	tr := Tracker{}
-	out := tr.Update([]Detection{{Box: rect(0, 0, 20, 40), Score: 0.9}})
-	id := out[0].ID
-
-	out = tr.Update([]Detection{{Box: rect(25, 0, 45, 40), Score: 0.9}}) // shifted +25px, no overlap
-	if len(out) != 1 {
-		t.Fatalf("got %d tracks, want 1 (centroid should re-associate)", len(out))
-	}
-	if out[0].ID != id {
-		t.Errorf("ID changed %d -> %d across an ego-motion jump", id, out[0].ID)
-	}
-}
-
-func TestTrackerStableIDsAndExpiry(t *testing.T) {
-	tr := Tracker{MaxMissed: 2}
-
-	// Frame 1: one person -> ID 1.
-	out := tr.Update([]Detection{{Box: rect(0, 0, 20, 40), Score: 0.9}})
-	if len(out) != 1 || out[0].ID != 1 {
-		t.Fatalf("frame1 = %+v, want one track id1", out)
-	}
-
-	// Frame 2: the same person nudged + a new disjoint one -> ID 1 keeps, ID 2 new.
-	out = tr.Update([]Detection{
-		{Box: rect(2, 1, 22, 41), Score: 0.9}, // overlaps track 1
-		{Box: rect(100, 0, 120, 40), Score: 0.8},
-	})
-	if len(out) != 2 {
-		t.Fatalf("frame2 tracks = %d, want 2", len(out))
-	}
-	byID := map[int]Track{}
-	for _, x := range out {
-		byID[x.ID] = x
-	}
-	if got, ok := byID[1]; !ok || got.Age != 2 || got.Missed != 0 {
-		t.Errorf("track 1 = %+v, want Age2 Missed0", got)
-	}
-	if _, ok := byID[2]; !ok {
-		t.Errorf("expected a new track id2, got %+v", out)
-	}
-
-	// Three empty frames: both tracks miss; after MaxMissed=2 they're gone.
-	tr.Update(nil)
-	tr.Update(nil)
-	out = tr.Update(nil)
-	if len(out) != 0 {
-		t.Errorf("after expiry tracks = %+v, want none", out)
-	}
-}
+// Stable-ID, expiry, and ego-motion (centroid) association are covered for the live
+// tracker in kalman_test.go (the greedy Tracker these once exercised was retired).

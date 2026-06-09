@@ -53,6 +53,7 @@ type DetectConfig struct {
 	InputSize int     `yaml:"input_size,omitempty"` // model square input (default 640)
 	Conf      float64 `yaml:"conf,omitempty"`       // confidence threshold (default 0.4)
 	RateHz    int     `yaml:"rate_hz,omitempty"`    // max inference rate (default 10)
+	ConfLow   float64 `yaml:"conf_low,omitempty"`   // low-tier floor for the tracker's ByteTrack recovery stage (default 0.15)
 	Debug     bool    `yaml:"debug,omitempty"`      // log per-inference dets/tracks (also via DETECT_DEBUG)
 }
 
@@ -235,6 +236,9 @@ func (c *Config) normalize() {
 	}
 	if c.Detect.RateHz <= 0 {
 		c.Detect.RateHz = 10
+	}
+	if c.Detect.ConfLow <= 0 {
+		c.Detect.ConfLow = 0.15
 	}
 
 	// One-time upgrade of the superseded auto-aim defaults (gain 4 / deadband 0.03):

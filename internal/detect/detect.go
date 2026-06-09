@@ -48,7 +48,8 @@ type DetectorConfig struct {
 	ModelPath string
 	LibPath   string
 	InputSize int
-	Conf      float64
+	Conf      float64 // high (primary) confidence threshold
+	ConfLow   float64 // low floor: emit boxes down to here so ByteTrack's 2nd stage can recover tracks (0 = just use Conf)
 }
 
 // Detector runs inference on a single frame. Implementations are not required to
@@ -57,6 +58,7 @@ type Detector interface {
 	Detect(f *video.Frame) ([]Detection, error)
 	Close() error
 }
+
 
 // TrackBuffer is the single-slot latest-tracks mailbox (like video.Buffer): the
 // Runner sets, the UI reads the newest with Latest.
@@ -86,7 +88,7 @@ type Runner struct {
 	src     *video.Buffer
 	rate    atomic.Int64 // max inference rate (Hz); live-settable so the UI can retune without a model reload
 	out     TrackBuffer
-	tracker Tracker
+	tracker *kalmanTracker
 	stop    chan struct{}
 	done    chan struct{}
 	debug   atomic.Bool // log per-frame tracks; live-settable from the UI (or DETECT_DEBUG)
@@ -96,16 +98,18 @@ type Runner struct {
 }
 
 // NewRunner builds a Runner that pulls frames from src and detects at up to rateHz.
-// Call Start to launch the goroutine.
-func NewRunner(det Detector, src *video.Buffer, rateHz int) *Runner {
+// highConf is the primary confidence threshold the kalman tracker uses to split the
+// high/low detection tiers (ByteTrack). Call Start to launch the goroutine.
+func NewRunner(det Detector, src *video.Buffer, rateHz int, highConf float64) *Runner {
 	if rateHz <= 0 {
 		rateHz = 10
 	}
 	r := &Runner{
-		det:  det,
-		src:  src,
-		stop: make(chan struct{}),
-		done: make(chan struct{}),
+		det:     det,
+		src:     src,
+		tracker: &kalmanTracker{HighConf: highConf},
+		stop:    make(chan struct{}),
+		done:    make(chan struct{}),
 	}
 	r.rate.Store(int64(rateHz))
 	r.debug.Store(detectDebugEnv)

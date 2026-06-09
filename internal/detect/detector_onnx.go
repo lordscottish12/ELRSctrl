@@ -37,7 +37,8 @@ type onnxDetector struct {
 	output    *ort.Tensor[float32]
 	inputSize  int
 	anchors    int
-	conf       float64
+	conf       float64 // primary threshold (kept for the debug log / single-tier callers)
+	confLow    float64 // emit floor: boxes down to here flow through so the tracker can run ByteTrack's low tier (0 = use conf)
 	coordScale float64 // box-output unit: inputSize for normalized 0..1 exports, 1 for pixel exports (0 = sniff on first frame)
 	debug      bool
 }
@@ -107,7 +108,7 @@ func NewDetector(cfg DetectorConfig) (Detector, error) {
 
 	return &onnxDetector{
 		session: session, input: input, output: output,
-		inputSize: inSize, anchors: anchors, conf: conf,
+		inputSize: inSize, anchors: anchors, conf: conf, confLow: cfg.ConfLow,
 		debug: os.Getenv("DETECT_DEBUG") != "",
 	}, nil
 }
@@ -173,10 +174,17 @@ func (d *onnxDetector) decode(out []float32, fw, fh int, scale, padX, padY float
 		d.coordScale = sniffCoordScale(out, A, d.inputSize)
 	}
 	cs := d.coordScale
+	// Emit down to the low floor when set (so the tracker gets a low tier for ByteTrack);
+	// otherwise just the primary threshold. NMS still keeps the high boxes identical — a
+	// lower floor only adds weak boxes that don't overlap a stronger one.
+	floor := d.conf
+	if d.confLow > 0 && d.confLow < floor {
+		floor = d.confLow
+	}
 	var dets []Detection
 	for a := 0; a < A; a++ {
 		score := float64(out[personChannel*A+a])
-		if score < d.conf {
+		if score < floor {
 			continue
 		}
 		cx := float64(out[0*A+a]) * cs

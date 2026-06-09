@@ -210,12 +210,13 @@ func (g *Game) applyDetect() {
 		LibPath:   g.cfg.Detect.LibPath,
 		InputSize: g.cfg.Detect.InputSize,
 		Conf:      g.cfg.Detect.Conf,
+		ConfLow:   g.cfg.Detect.ConfLow,
 	})
 	if err != nil {
 		g.setStatus("detect: %v", err)
 		return
 	}
-	r := detect.NewRunner(det, g.videoCap.Buffer(), g.cfg.Detect.RateHz)
+	r := detect.NewRunner(det, g.videoCap.Buffer(), g.cfg.Detect.RateHz, g.cfg.Detect.Conf)
 	r.SetDebug(g.cfg.Detect.Debug)
 	r.Start()
 	g.detectRun = r

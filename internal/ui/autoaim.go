@@ -171,12 +171,17 @@ func (g *Game) updateAutoAim(live *[crsf.NumChannels]uint16, now time.Time) {
 
 	aimX, aimY := aimPointFrame(fw, fh, g.cfg.OSD.CrosshairX, g.cfg.OSD.CrosshairY)
 
-	// Advance the PD controller only on a *fresh* detection (the measurement updates at
-	// ~10 Hz, not the UI's 60 fps): integrating a stale error every frame, or computing
-	// a derivative from it, is meaningless. While coasting (Missed > 0) or between
-	// detections, hold the last command so the view doesn't snap back and detection gets
-	// a moment to re-acquire.
-	if tr.Missed == 0 && g.tracksSeq != g.aim.lastSeq {
+	// Advance the PD controller once per *fresh* tracker output (~10 Hz, not the UI's
+	// 60 fps): stepping it every frame would integrate a stale error and differentiate
+	// noise. Crucially this now advances while coasting (Missed > 0) too — the kalman
+	// tracker rides the locked target's last velocity forward through a brief occlusion,
+	// so we keep driving onto that predicted position instead of freezing mid-slew the
+	// instant the box drops (the old greedy tracker only froze the last box, so coasting
+	// used to be meaningless to consume — hence the previous Missed==0 guard). The
+	// tracker decays the coast velocity toward a standstill and drops the track after
+	// MaxMissed, so this eases onto the last-known position and holds — it can't chase a
+	// runaway extrapolation.
+	if g.tracksSeq != g.aim.lastSeq {
 		dt := now.Sub(g.aim.last).Seconds()
 		g.aim.last = now
 		g.aim.lastSeq = g.tracksSeq
@@ -221,8 +226,8 @@ func (g *Game) updateAutoAim(live *[crsf.NumChannels]uint16, now time.Time) {
 		}
 	}
 
-	// Drive (or, while coasting/between detections, hold) the channels at the current
-	// command.
+	// Drive the channels at the current command (advanced above on each fresh tracker
+	// output incl. coast; held on the UI frames in between).
 	if panCh >= 0 {
 		live[panCh] = posToTicks(g.aim.panPos, g.cfg.Channels[panCh])
 	}
