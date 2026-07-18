@@ -7,8 +7,13 @@ input, persistent 3D reconstruction, and localization inside that reconstruction
 That autonomy stack is **not implemented yet**. The staged architecture, research
 basis, safety gates, and current milestone live in the
 [`drone autonomy roadmap`](docs/autonomy-roadmap.md). The existing Go application is
-intended to remain the operator console and manual/backup ELRS control layer while a
-separate ROS 2/PX4 autonomy stack is developed.
+the proven ELRS safety/control path. The active experimental plan targets the
+DarkStar22 in Betaflight Angle mode: a ground-PC sidecar will localize from the
+existing analog monocular feed and request bounded, expiring CRSF commands through
+Go. AprilTag metric anchors come first; natural-feature 3D memory follows after the
+replay and safety gates. A downward Upixel UP-T1-001-Plus is planned as an optional
+stabilization/height aid pending firmware, wiring, power, mounting, and bench
+verification.
 
 Turn a **Steam Deck** (or any gamepad) into an RC transmitter for an **EMAX Aeris
 Link / ExpressLRS (ELRS) TX module**. It reads the Deck's controls, lets you remap

@@ -18,14 +18,22 @@ repository and has passed the roadmap's stated evidence gate.
 
 - Work from the current milestone and its dependencies unless the user explicitly
   changes priorities.
-- Preserve the architectural boundary between the existing Go/ELRS operator console
-  and the future ROS 2/PX4 autonomy stack.
-- Never turn autonomous navigation into raw RC-channel overrides. PX4 must retain the
-  onboard attitude/rate/motor loops and receive bounded offboard setpoints.
-- Preserve an independent manual takeover and the existing defense-in-depth failsafe
-  behavior.
+- Preserve the boundary between the existing Go/ELRS serial sender and the future
+  capture/perception/localization sidecar. Autonomy may enter Go only through the
+  roadmap's bounded, sequenced, expiring local interface.
+- Betaflight Angle mode must retain the onboard attitude/rate/motor loops. Autonomous
+  CRSF requests are permitted only for the selected experimental microdrones and must
+  pass Go-side clamping, freshness, state, and kill/disarm enforcement.
+- The autonomy process must never arm the aircraft. Preserve explicit operator
+  arm/kill, existing defense-in-depth failsafes, ELRS/Betaflight loss behavior, and
+  the roadmap's staged props-off and controlled-flight gates.
+- Do not enable Betaflight's experimental real-aircraft waypoint autopilot.
 - Treat camera timestamps, calibration, coordinate frames, estimator confidence,
-  and replayable logs as correctness requirements, not optional polish.
+  analog-link latency, command age, and replayable logs as correctness requirements,
+  not optional polish.
+- Treat the Upixel UP-T1-001-Plus as planned, not installed or compatible, until the
+  exact DarkStar firmware target, UART, 5 V/current budget, mounting, and props-off
+  evidence satisfy the roadmap.
 - Do not proceed to a real-flight milestone until the preceding simulation, replay,
   fault-injection, and safety gates are satisfied.
 
