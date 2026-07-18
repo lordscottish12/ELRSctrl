@@ -1,5 +1,15 @@
 # ELRSctrl
 
+## Long-term project direction
+
+The long-term goal is autonomous drone waypoint flight using visual environmental
+input, persistent 3D reconstruction, and localization inside that reconstruction.
+That autonomy stack is **not implemented yet**. The staged architecture, research
+basis, safety gates, and current milestone live in the
+[`drone autonomy roadmap`](docs/autonomy-roadmap.md). The existing Go application is
+intended to remain the operator console and manual/backup ELRS control layer while a
+separate ROS 2/PX4 autonomy stack is developed.
+
 Turn a **Steam Deck** (or any gamepad) into an RC transmitter for an **EMAX Aeris
 Link / ExpressLRS (ELRS) TX module**. It reads the Deck's controls, lets you remap
 any input to any of 16 RC channels, and streams **CRSF** frames to the module over

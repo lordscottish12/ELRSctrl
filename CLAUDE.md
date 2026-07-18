@@ -2,6 +2,15 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Project roadmap
+
+Before planning or implementing work, read
+[`docs/autonomy-roadmap.md`](docs/autonomy-roadmap.md). It is the source of truth for
+the long-term drone-autonomy architecture, current milestone, safety boundaries, and
+evidence gates. Do not describe roadmap capabilities as implemented unless the code
+and required evidence exist. When work materially advances or changes the plan,
+update the roadmap in the same change.
+
 ## What this is
 
 `elrsctrl` turns a Steam Deck (or any gamepad) into an RC transmitter for an
